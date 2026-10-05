@@ -1,3 +1,6 @@
+# Homestay and Community Tourism Booking app
+
+A cross-platform mobile app connecting travelers with rural homestays and authentic local experiences, while helping village hosts manage listings and bookings.
 
 ## Getting Started
 

@@ -66,7 +66,7 @@ export default function TravelerProfile() {
         <ProfileRows items={[
           { icon: 'tune', label: t('settings'), onPress: () => router.push('/settings') },
           { icon: 'campaign', label: t('announcements'), onPress: () => router.push('/announcements') },
-          { icon: 'support', label: 'Help & Support', onPress: () => showAlert('Support', 'Contact RootedStay support at support@rootedstay.lk') },
+          { icon: 'support', label: t('support'), onPress: () => router.push('/support') },
         ]}/>
 
         <Button title={t('signOut')} onPress={logout} variant="ghost" style={{ marginTop: spacing.xl }} />

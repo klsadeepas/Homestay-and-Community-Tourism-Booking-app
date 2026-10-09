@@ -24,6 +24,15 @@ export default function AdminLayout() {
       <Tabs.Screen name="users" options={{ title: t('users'), tabBarIcon: ({ color, size }) => <MaterialIcons name="people" size={size} color={color} /> }} />
       <Tabs.Screen name="audit" options={{ title: t('audit'), tabBarIcon: ({ color, size }) => <MaterialIcons name="receipt-long" size={size} color={color} /> }} />
       <Tabs.Screen name="profile" options={{ title: t('profile'), tabBarIcon: ({ color, size }) => <MaterialIcons name="person" size={size} color={color} /> }} />
+      <Tabs.Screen name="approvals" options={{ href: null }} />
+      <Tabs.Screen name="activities" options={{ href: null }} />
+      <Tabs.Screen name="guides" options={{ href: null }} />
+      <Tabs.Screen name="bookings" options={{ href: null }} />
+      <Tabs.Screen name="payments" options={{ href: null }} />
+      <Tabs.Screen name="reviews" options={{ href: null }} />
+      <Tabs.Screen name="support" options={{ href: null }} />
+      <Tabs.Screen name="reports" options={{ href: null }} />
+      <Tabs.Screen name="system" options={{ href: null }} />
     </Tabs>
   );
 }

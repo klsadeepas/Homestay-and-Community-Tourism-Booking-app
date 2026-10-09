@@ -34,8 +34,8 @@ export default function AdminProfile() {
         <Text style={styles.section}>Administration</Text>
         <ProfileRows items={[
           { icon: 'people', label: 'Manage users', onPress: () => router.push('/(admin)/users') },
-          { icon: 'verified', label: 'Listing moderation', onPress: () => router.push('/(coordinator)/approvals') },
-          { icon: 'location-city', label: 'Villages', onPress: () => router.push('/(coordinator)/villages') },
+          { icon: 'verified', label: 'Listing moderation', onPress: () => router.push('/(admin)/approvals') },
+          { icon: 'bar-chart', label: 'Reports & analytics', onPress: () => router.push('/(admin)/reports') },
           { icon: 'receipt-long', label: 'Audit log', onPress: () => router.push('/(admin)/audit') },
         ]} />
         <Text style={styles.section}>App</Text>

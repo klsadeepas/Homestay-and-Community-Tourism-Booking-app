@@ -7,7 +7,6 @@
     "icon": "./assets/images/logo.png",
     "scheme": "onspaceapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -17,7 +16,10 @@
         "foregroundImage": "./assets/images/logo.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "config": {
+        "googleMaps": { "apiKey": "OYAGE_GOOGLE_MAPS_KEY" }
+      },
+      "permissions": ["CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION"]
     },
     "web": {
       "bundler": "metro",
@@ -35,7 +37,11 @@
           "backgroundColor": "#ffffff"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        { "android": { "buildArchs": ["arm64-v8a"] } }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

@@ -61,6 +61,10 @@ export const translations: Record<Lang, Record<string, string>> = {
     markCompleted: 'Mark completed', manageEvents: 'Manage events',
     // Demo labels
     demoLabel: 'Demo data', notConnected: 'Not connected in this demo',
+    // Support
+    support: 'Help & Support', faq: 'FAQ', myTickets: 'My Requests', newTicket: 'New Request',
+    subject: 'Subject', message: 'Message', send: 'Send', category: 'Category',
+    ticketSent: 'Request sent', contactSupport: 'Still need help? Send us a request and the team will reply here.',
   },
   si: {
     appName: 'රූටඩ්ස්ටේ',
@@ -105,5 +109,8 @@ export const translations: Record<Lang, Record<string, string>> = {
     attendance: 'පැමිණීම', checkedIn: 'ඇතුළත් විය', noShow: 'පැමිණ නැත',
     markCompleted: 'සම්පූර්ණ කර ලෙස සලකුණු කරන්න', manageEvents: 'සිදුවීම් කළමනාකරණය',
     demoLabel: 'සංදර්ශන දත්ත', notConnected: 'මෙම සංදර්ශනයේ සම්බන්ධ නැත',
+    support: 'උදව් සහ සහාය', faq: 'නිතර අසන ප්‍රශ්න', myTickets: 'මගේ ඉල්ලීම්', newTicket: 'නව ඉල්ලීම',
+    subject: 'මාතෘකාව', message: 'පණිවිඩය', send: 'යොමන්න', category: 'ප්‍රවර්ගය',
+    ticketSent: 'ඉල්ලීම යවන ලදී', contactSupport: 'තවම උදව් අවශ්‍යද? අපට ඉල්ලීමක් එවන්න, කණ්ණාඩිය මෙහි පිළිතුරු දෙයි.',
   },
 };

@@ -90,6 +90,14 @@ export type BenefitRecord = {
   note?: string;
 };
 
+export type TourCategory = 'general' | 'adventure' | 'eco' | 'cultural' | 'wellness';
+export const TOUR_CATEGORIES: TourCategory[] = ['general', 'adventure', 'eco', 'cultural', 'wellness'];
+
+export type ScheduleSlot = { id: string; date: string; time: string; capacity: number; note?: string };
+
+const today = new Date();
+const inDays = (d: number) => new Date(today.getTime() + d * 86400000).toISOString().slice(0, 10);
+
 export type Listing = {
   id: string;
   type: 'homestay' | 'tour' | 'experience';
@@ -120,6 +128,8 @@ export type Listing = {
   seasonInfo?: string;
   coordinates?: { lat: number; lng: number };
   reviewReason?: string; // last coordinator reason, for 'needs_changes'/'suspended'
+  tourCategory?: TourCategory; // adventure / eco-tour packages vs cultural etc.
+  scheduleSlots?: ScheduleSlot[]; // upcoming scheduled departures for tours & experiences
 };
 
 export const sampleListings: Listing[] = [
@@ -150,6 +160,11 @@ export const sampleListings: Listing[] = [
     status: 'approved', instantBooking: false,
     accessibility: { mobility: ['Not suitable for mobility aids'], bathroom: [], food: [] },
     benefit: { beneficiary: 'guide', note: 'Guided by local resident; sustains two guiding families.' },
+    tourCategory: 'adventure',
+    scheduleSlots: [
+      { id: 'ss-3a', date: inDays(4), time: '04:30', capacity: 10 },
+      { id: 'ss-3b', date: inDays(11), time: '04:30', capacity: 10 },
+    ],
     coordinates: { lat: 7.9589, lng: 80.7569 },
   },
   {
@@ -161,6 +176,11 @@ export const sampleListings: Listing[] = [
     status: 'approved', instantBooking: true,
     accessibility: { mobility: ['Uneven village paths'], bathroom: ['basic facilities'], food: ['Vegetarian', 'Halal on request'], other: 'Flexible pace available.' },
     benefit: { beneficiary: 'community', projectName: 'Hiriwadunna Lake Trust', percentage: 10, note: '10% of each booking supports the lake conservation group.' },
+    tourCategory: 'eco',
+    scheduleSlots: [
+      { id: 'ss-4a', date: inDays(7), time: '09:00', capacity: 12 },
+      { id: 'ss-4b', date: inDays(14), time: '09:00', capacity: 12 },
+    ],
     coordinates: { lat: 7.9838, lng: 80.6672 },
   },
   {
@@ -190,6 +210,7 @@ export const sampleListings: Listing[] = [
     status: 'approved', instantBooking: false,
     accessibility: { mobility: ['step-free workshop'], bathroom: ['shared'], food: [] },
     benefit: { beneficiary: 'project', projectName: 'Sigiriya Craft Cooperative', percentage: 15, note: '15% supports the craft cooperative\'s youth training.' },
+    tourCategory: 'cultural',
     coordinates: { lat: 7.9540, lng: 80.7600 },
   },
   {
@@ -201,6 +222,7 @@ export const sampleListings: Listing[] = [
     status: 'approved', instantBooking: true,
     accessibility: { mobility: ['Rough terrain, boots recommended'], bathroom: [], food: ['Vegetarian'] },
     benefit: { beneficiary: 'community', projectName: 'Hiriwadunna Youth Fund', amountLKR: 300, note: 'LKR 300 per booking to the youth fund.' },
+    tourCategory: 'eco',
     coordinates: { lat: 7.9825, lng: 80.6680 },
   },
 ];
@@ -227,14 +249,13 @@ export type Booking = {
   instantConfirmed?: boolean;
 };
 
-const today = new Date();
-const inDays = (d: number) => new Date(today.getTime() + d * 86400000).toISOString().slice(0, 10);
-
 export const sampleBookings: Booking[] = [
   { id: 'b-1', listingId: 'l-1', travelerId: 'u-trav-1', dateFrom: inDays(5), dateTo: inDays(8), guests: 2, rooms: 1, totalLKR: 22500, status: 'confirmed', note: 'Vegetarian meals please.', createdAt: inDays(-3), checkIn: 'booked', paymentStatus: 'paid', paymentMethod: 'card_demo', paymentRef: 'RS-DEMO-1001', paidAt: inDays(-2), dietaryRequest: 'Vegetarian' },
   { id: 'b-2', listingId: 'l-3', travelerId: 'u-trav-1', dateFrom: inDays(6), dateTo: inDays(6), guests: 2, totalLKR: 7000, status: 'pending', note: 'First time hiking at dawn.', createdAt: inDays(-1), paymentStatus: 'unpaid' },
   { id: 'b-3', listingId: 'l-4', travelerId: 'u-trav-1', dateFrom: inDays(-10), dateTo: inDays(-10), guests: 3, totalLKR: 14400, status: 'completed', createdAt: inDays(-20), checkIn: 'checked_in', paymentStatus: 'paid', paymentMethod: 'card_demo', paymentRef: 'RS-DEMO-1000', paidAt: inDays(-11) },
 ];
+
+export type ReviewReply = { text: string; authorId: string; createdAt: string };
 
 export type Review = {
   id: string;
@@ -244,6 +265,8 @@ export type Review = {
   rating: number;
   text: string;
   createdAt: string;
+  hostReply?: ReviewReply; // host / admin response to the review
+  hidden?: boolean; // removed from public view by moderation
 };
 
 export const sampleReviews: Review[] = [
@@ -418,3 +441,54 @@ export const sampleSeasonal: SeasonalHighlight[] = [
   { id: 's-2', villageId: 'v-sigiriya', title: 'Dry season — rock climbs', type: 'weather', description: 'Clear mornings for Pidurangala and Lion Rock. Weather varies — check locally.', recurring: true, dateFrom: '12-01', dateTo: '03-31', photo: IMG.sigiriya },
   { id: 's-3', villageId: 'v-hiriwadunna', title: 'Rice harvest', type: 'harvest', description: 'Village lunches often feature freshly harvested rice.', recurring: true, dateFrom: '08-15', dateTo: '09-30', photo: IMG.hiriwadunna },
 ];
+
+// ---------- FAQ / SUPPORT / PLATFORM CONFIG ----------
+
+export type FAQItem = {
+  id: string;
+  question: string;
+  answer: string;
+  category: string;
+  published: boolean;
+  order: number;
+};
+
+export const sampleFAQs: FAQItem[] = [
+  { id: 'f-1', question: 'How do I book a homestay?', answer: 'Browse the Explore tab, open a listing, pick your dates and guests, then submit the request. The host confirms within the booking window.', category: 'booking', published: true, order: 1 },
+  { id: 'f-2', question: 'When am I charged for a booking?', answer: 'Payment is collected after the host confirms your request. Confirmed bookings show a demo payment reference you can view in My Bookings.', category: 'payment', published: true, order: 2 },
+  { id: 'f-3', question: 'Can I cancel a booking?', answer: 'Yes — open the booking and choose Cancel. Any refund follows the host cancellation policy shown on the listing.', category: 'booking', published: true, order: 3 },
+  { id: 'f-4', question: 'How do I become a host?', answer: 'Sign up as a host, complete your profile, and add your homestay. Coordinators review and approve new listings before they go live.', category: 'host', published: true, order: 4 },
+  { id: 'f-5', question: 'Are local guides certified?', answer: 'All guides are registered with RootedStay and vetted by village coordinators before their tours appear.', category: 'guide', published: true, order: 5 },
+  { id: 'f-6', question: 'Does the app work offline?', answer: 'Confirmed booking details and village info are cached on your device so you can view them without a connection.', category: 'app', published: true, order: 6 },
+];
+
+export type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
+export type TicketReply = { id: string; from: string; text: string; createdAt: string; staff?: boolean };
+
+export type SupportTicket = {
+  id: string;
+  userId: string;
+  subject: string;
+  category: 'booking' | 'payment' | 'host' | 'guide' | 'app' | 'other';
+  message: string;
+  status: TicketStatus;
+  priority: 'low' | 'normal' | 'high';
+  createdAt: string;
+  replies: TicketReply[];
+};
+
+export const sampleTickets: SupportTicket[] = [
+  { id: 'tk-1', userId: 'u-trav-1', subject: 'Double charge on booking b-1', category: 'payment', message: 'I see two payment entries for the same booking. Can you check?', status: 'in_progress', priority: 'high', createdAt: inDays(-1), replies: [
+    { id: 'tkr-1', from: 'RootedStay Support', text: 'Thanks for flagging — checking the demo payment ledger now.', createdAt: inDays(-1), staff: true },
+  ] },
+  { id: 'tk-2', userId: 'u-trav-1', subject: 'How to add a second guest?', category: 'booking', message: 'Can I update the guest count on my upcoming stay?', status: 'open', priority: 'normal', createdAt: inDays(0), replies: [] },
+];
+
+export type PlatformConfig = {
+  serviceFeePct: number;
+  bookingNoticeDays: number;
+  maintenanceMode: boolean;
+  supportEmail: string;
+};
+
+export const samplePlatform: PlatformConfig = { serviceFeePct: 5, bookingNoticeDays: 1, maintenanceMode: false, supportEmail: 'support@rootedstay.lk' };

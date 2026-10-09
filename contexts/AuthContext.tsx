@@ -9,6 +9,7 @@ type AuthState = {
   ready: boolean;
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signUp: (data: Partial<SampleUser> & { email: string; password: string; name: string; role: Role }) => Promise<{ ok: boolean; error?: string }>;
+  addUser: (data: Partial<SampleUser> & { email: string; password: string; name: string; role: Role }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
   updateProfile: (patch: Partial<SampleUser>) => Promise<void>;
   updateUser: (id: string, patch: Partial<SampleUser>) => Promise<void>;
@@ -79,6 +80,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { ok: true };
   };
 
+  const addUser: AuthState['addUser'] = async (data) => {
+    const exists = users.find((u) => u.email.toLowerCase() === data.email.trim().toLowerCase());
+    if (exists) return { ok: false, error: 'An account with this email already exists' };
+    const nu: SampleUser = {
+      id: `u-${Date.now()}`,
+      language: 'en',
+      status: 'active',
+      notifyBookings: true,
+      notifyMessages: true,
+      notifyAnnouncements: true,
+      ...data,
+      email: data.email.trim(),
+    };
+    await persistUsers([...users, nu]);
+    return { ok: true };
+  };
+
   const signOut = async () => {
     setUser(null);
     await storage.remove(KEYS.session);
@@ -99,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user, users]);
 
   return (
-    <AuthContext.Provider value={{ user, users, ready, signIn, signUp, signOut, updateProfile, updateUser }}>
+    <AuthContext.Provider value={{ user, users, ready, signIn, signUp, addUser, signOut, updateProfile, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

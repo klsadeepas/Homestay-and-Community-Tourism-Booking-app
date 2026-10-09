@@ -35,4 +35,7 @@ export const KEYS = {
   responsible: 'rs_responsible',
   seasonal: 'rs_seasonal',
   filters: 'rs_filters',
+  faqs: 'rs_faqs',
+  tickets: 'rs_tickets',
+  platform: 'rs_platform',
 };

@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -7,8 +7,13 @@ import { AlertProvider } from '@/template';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { DataProvider } from '@/contexts/DataContext';
+import { startLiveSync } from '@/services/sync';
 
 export default function RootLayout() {
+  useEffect(() => {
+    startLiveSync();
+  }, []);
+
   return (
     <AlertProvider>
       <SafeAreaProvider>

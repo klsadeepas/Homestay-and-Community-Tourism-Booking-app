@@ -1,6 +1,6 @@
-import React, { createContext, useEffect, useState, ReactNode, useCallback } from 'react';
+import React, { createContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react';
 import { storage, KEYS } from '@/services/storage';
-import { syncFromRemote } from '@/services/sync';
+import { syncFromRemote, addRemoteChangeListener } from '@/services/sync';
 import { sampleUsers, SampleUser } from '@/constants/sampleData';
 import { Role } from '@/services/types';
 
@@ -22,6 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SampleUser | null>(null);
   const [users, setUsers] = useState<SampleUser[]>(sampleUsers);
   const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -37,8 +38,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const found = storedUsers.find((u) => u.id === sessionId) || null;
         setUser(found);
       }
+      readyRef.current = true;
       setReady(true);
     })();
+  }, []);
+
+  // Live refresh: account changes made on another device (new sign-ups,
+  // profile edits, admin suspensions) appear immediately, and a remotely
+  // suspended/deleted account is signed out live. rs_session stays local.
+  useEffect(() => {
+    return addRemoteChangeListener((keys) => {
+      if (!readyRef.current || !keys.includes(KEYS.users)) return;
+      void (async () => {
+        const storedUsers = await storage.get<SampleUser[]>(KEYS.users);
+        if (!storedUsers) return;
+        setUsers(storedUsers);
+        const sessionId = await storage.get<string>(KEYS.session);
+        setUser(sessionId ? storedUsers.find((u) => u.id === sessionId) ?? null : null);
+      })();
+    });
   }, []);
 
   const persistUsers = async (next: SampleUser[]) => {

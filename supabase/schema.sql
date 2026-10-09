@@ -23,3 +23,18 @@ create policy "demo insert" on public.app_data
 drop policy if exists "demo update" on public.app_data;
 create policy "demo update" on public.app_data
   for update to anon, authenticated using (true) with check (true);
+
+-- Live updates: stream row changes to every connected app instance
+-- (Supabase Realtime). Idempotent — safe to re-run. If you skip this, the app
+-- still syncs, but only via startup pull + 20s polling instead of ~1s push.
+alter table public.app_data replica identity full;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'app_data'
+  ) then
+    alter publication supabase_realtime add table public.app_data;
+  end if;
+end $$;

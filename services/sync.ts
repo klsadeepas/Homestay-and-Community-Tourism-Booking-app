@@ -91,13 +91,75 @@ function withTimeout<T>(p: PromiseLike<T>, ms: number): Promise<T> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Remote-change listeners. Contexts subscribe so in-memory React state
+// refreshes the moment another device writes to the cloud table — writing
+// AsyncStorage alone would not update what is already on screen.
+// ---------------------------------------------------------------------------
+type RemoteListener = (keys: string[]) => void;
+const listeners = new Set<RemoteListener>();
+const notifyQueue = new Set<string>();
+let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function addRemoteChangeListener(cb: RemoteListener): () => void {
+  listeners.add(cb);
+  return () => { listeners.delete(cb); };
+}
+
+// Batched 150ms so a multi-key write from another device (e.g. chat message
+// touching rs_messages + rs_threads) triggers one refresh wave, not N.
+function queueNotify(key: string): void {
+  notifyQueue.add(key);
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
+    const keys = [...notifyQueue];
+    notifyQueue.clear();
+    for (const cb of listeners) {
+      try { cb(keys); } catch {}
+    }
+  }, 150);
+}
+
+// Applies one remote row to AsyncStorage only when it is newer than the last
+// local write (last-write-wins by timestamp). Writes AsyncStorage directly —
+// going through storage.set would re-trigger notifyWrite and echo the value
+// back to the cloud forever. Returns true when the stored value changed.
+async function applyRemoteRow(key: string, value: unknown, updatedAt: string): Promise<boolean> {
+  if (!isSyncable(key) || !updatedAt) return false;
+  let localTs: string | null = null;
+  try {
+    const raw = await AsyncStorage.getItem(metaKey(key));
+    localTs = raw ? (JSON.parse(raw) as string) : null;
+  } catch { localTs = null; }
+  if (localTs && new Date(updatedAt).getTime() <= new Date(localTs).getTime()) return false;
+  const next = JSON.stringify(value ?? null);
+  let changed = true;
+  try {
+    changed = (await AsyncStorage.getItem(key)) !== next;
+  } catch { changed = true; }
+  await AsyncStorage.setItem(key, next);
+  await AsyncStorage.setItem(metaKey(key), JSON.stringify(updatedAt));
+  return changed;
+}
+
+async function applyRemoteDelete(key: string): Promise<boolean> {
+  if (!isSyncable(key)) return false;
+  let existed = false;
+  try { existed = (await AsyncStorage.getItem(key)) !== null; } catch { existed = false; }
+  await AsyncStorage.removeItem(key);
+  await AsyncStorage.removeItem(metaKey(key));
+  return existed;
+}
+
 let inflight: Promise<void> | null = null;
 let lastAttempt = 0;
 let lastAttemptFailed = false;
 
-// Pulls every remote row newer than our local write timestamp into AsyncStorage.
-// Safe to call at every provider mount: no-op without config, times out offline,
-// and never throws — the app always continues with local data.
+// Pulls every remote row newer than our local write timestamp into AsyncStorage
+// and notifies listeners about changed keys. Safe to call at every provider
+// mount: no-op without config, times out offline, and never throws — the app
+// always continues with local data.
 export async function syncFromRemote(timeoutMs = 2500): Promise<void> {
   const c = getClient();
   if (!c) return;
@@ -117,16 +179,12 @@ export async function syncFromRemote(timeoutMs = 2500): Promise<void> {
       }
       const rows = (res.data ?? []) as Array<{ data_key: string; value: unknown; updated_at: string }>;
       for (const row of rows) {
-        const key = row?.data_key;
-        if (!key || !isSyncable(key) || !row.updated_at) continue;
-        let localTs: string | null = null;
+        if (!row?.data_key || !row.updated_at) continue;
         try {
-          const raw = await AsyncStorage.getItem(metaKey(key));
-          localTs = raw ? (JSON.parse(raw) as string) : null;
-        } catch { localTs = null; }
-        if (localTs && new Date(row.updated_at).getTime() <= new Date(localTs).getTime()) continue;
-        await AsyncStorage.setItem(key, JSON.stringify(row.value ?? null));
-        await AsyncStorage.setItem(metaKey(key), JSON.stringify(row.updated_at));
+          if (await applyRemoteRow(row.data_key, row.value ?? null, row.updated_at)) {
+            queueNotify(row.data_key);
+          }
+        } catch {}
       }
       lastAttemptFailed = false;
     } catch (e) {
@@ -137,4 +195,48 @@ export async function syncFromRemote(timeoutMs = 2500): Promise<void> {
     }
   })();
   return inflight;
+}
+
+let liveStarted = false;
+
+// Starts live cross-device sync. A Supabase Realtime channel streams every
+// change on app_data to this device within ~1s; a 20s poll covers realtime
+// being unavailable (e.g. table not added to the publication in the
+// dashboard). Idempotent; no-op when the cloud is not configured.
+export function startLiveSync(): void {
+  const c = getClient();
+  if (!c || liveStarted) return;
+  liveStarted = true;
+
+  try {
+    c.channel(`live-${TABLE}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+        void (async () => {
+          try {
+            if (payload.eventType === 'DELETE') {
+              const key = (payload.old as { data_key?: string } | null)?.data_key;
+              if (key && (await applyRemoteDelete(key))) queueNotify(key);
+              return;
+            }
+            const row = payload.new as { data_key?: string; value?: unknown; updated_at?: string } | null;
+            if (!row?.data_key || !row.updated_at) return;
+            if (await applyRemoteRow(row.data_key, row.value ?? null, row.updated_at)) {
+              queueNotify(row.data_key);
+            }
+          } catch (e) {
+            console.warn('[sync] live apply error', e);
+          }
+        })();
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') console.info('[sync] live updates connected');
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn(`[sync] live channel ${status} — 20s polling keeps data fresh`);
+        }
+      });
+  } catch (e) {
+    console.warn('[sync] realtime unavailable — polling only', e);
+  }
+
+  setInterval(() => { void syncFromRemote(); }, 20000);
 }

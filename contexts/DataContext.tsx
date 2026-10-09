@@ -1,6 +1,6 @@
-import React, { createContext, useEffect, useState, ReactNode, useCallback } from 'react';
+import React, { createContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react';
 import { storage, KEYS } from '@/services/storage';
-import { syncFromRemote } from '@/services/sync';
+import { syncFromRemote, addRemoteChangeListener } from '@/services/sync';
 import {
   Listing, Booking, Review, EventItem, Announcement, Thread, Message, Notification, AuditEntry, Report, Village,
   TransportInfo, PickupRequest, ArrivalInfo, ResponsibleGuide, SeasonalHighlight,
@@ -98,6 +98,67 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [tickets, setTickets] = useState<SupportTicket[]>(sampleTickets);
   const [platform, setPlatform] = useState<PlatformConfig>(samplePlatform);
   const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Re-reads every synced key from AsyncStorage into React state — the same
+  // values a fresh app start would show. Used for live cross-device refresh.
+  const reloadAllFromStorage = useCallback(async () => {
+    const [l, b, r, e, an, th, me, no, au, rep, vi, wi, tr, pi, ar, rg, se, fq, ti, pf] =
+      await Promise.all([
+        loadOrSeed(KEYS.listings, sampleListings),
+        loadOrSeed(KEYS.bookings, sampleBookings),
+        loadOrSeed(KEYS.reviews, sampleReviews),
+        loadOrSeed(KEYS.events, sampleEvents),
+        loadOrSeed(KEYS.announcements, sampleAnnouncements),
+        loadOrSeed(KEYS.threads, sampleThreads),
+        loadOrSeed(KEYS.messages, sampleMessages),
+        loadOrSeed(KEYS.notifications, sampleNotifications),
+        loadOrSeed(KEYS.audit, sampleAudit),
+        loadOrSeed(KEYS.reports, sampleReports),
+        loadOrSeed(KEYS.villages, sampleVillages),
+        loadOrSeed(KEYS.wishlist, [] as string[]),
+        loadOrSeed(KEYS.transport, sampleTransport),
+        loadOrSeed(KEYS.pickups, samplePickups),
+        loadOrSeed(KEYS.arrivals, sampleArrivals),
+        loadOrSeed(KEYS.responsible, sampleResponsible),
+        loadOrSeed(KEYS.seasonal, sampleSeasonal),
+        loadOrSeed(KEYS.faqs, sampleFAQs),
+        loadOrSeed(KEYS.tickets, sampleTickets),
+        loadOrSeed(KEYS.platform, samplePlatform),
+      ]);
+    setListings(l);
+    setBookings(b);
+    setReviews(r);
+    setEvents(e);
+    setAnnouncements(an);
+    setThreads(th);
+    setMessages(me);
+    setNotifications(no);
+    setAudit(au);
+    setReports(rep);
+    setVillages(vi);
+    setWishlist(wi);
+    setTransport(tr);
+    setPickups(pi);
+    setArrivals(ar);
+    setResponsible(rg);
+    setSeasonal(se);
+    setFaqs(fq);
+    setTickets(ti);
+    setPlatform(pf);
+  }, []);
+
+  // Live refresh: whenever another device writes to the cloud, reload state
+  // from storage so screens update without an app restart. Debounced so a
+  // burst of remote keys settles into one reload.
+  useEffect(() => {
+    return addRemoteChangeListener(() => {
+      if (!readyRef.current) return;
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+      reloadTimer.current = setTimeout(() => { void reloadAllFromStorage(); }, 250);
+    });
+  }, [reloadAllFromStorage]);
 
   useEffect(() => {
     (async () => {
@@ -159,6 +220,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setTickets(await loadOrSeed(KEYS.tickets, sampleTickets));
       setPlatform(await loadOrSeed(KEYS.platform, samplePlatform));
 
+      readyRef.current = true;
       setReady(true);
     })();
   }, []);

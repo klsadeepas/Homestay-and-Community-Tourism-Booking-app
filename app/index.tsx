@@ -18,7 +18,7 @@ export default function Index() {
     case 'traveler': return <Redirect href="/(traveler)" />;
     case 'owner': return <Redirect href="/(owner)" />;
     case 'guide': return <Redirect href="/(guide)" />;
-    case 'coordinator': return <Redirect href="/(coordinator)" />;
+    case 'coordinator': return <Redirect href="/manage-events" />;
     case 'admin': return <Redirect href="/(admin)" />;
     default: return <Redirect href="/(auth)/login" />;
   }

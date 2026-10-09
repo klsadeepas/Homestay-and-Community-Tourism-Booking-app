@@ -31,6 +31,7 @@ export default function RootLayout() {
                 <Stack.Screen name="announcements" />
                 <Stack.Screen name="performance" />
                 <Stack.Screen name="manage-events" />
+                <Stack.Screen name="support" />
                 <Stack.Screen name="listing/[id]" />
                 <Stack.Screen name="village/[id]" />
                 <Stack.Screen name="booking/[id]" />

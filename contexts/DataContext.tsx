@@ -3,9 +3,11 @@ import { storage, KEYS } from '@/services/storage';
 import {
   Listing, Booking, Review, EventItem, Announcement, Thread, Message, Notification, AuditEntry, Report, Village,
   TransportInfo, PickupRequest, ArrivalInfo, ResponsibleGuide, SeasonalHighlight,
+  FAQItem, SupportTicket, PlatformConfig,
   sampleListings, sampleBookings, sampleReviews, sampleEvents, sampleAnnouncements, sampleThreads, sampleMessages,
   sampleNotifications, sampleAudit, sampleReports, sampleVillages,
   sampleTransport, samplePickups, sampleArrivals, sampleResponsible, sampleSeasonal,
+  sampleFAQs, sampleTickets, samplePlatform,
 } from '@/constants/sampleData';
 
 type DataState = {
@@ -26,6 +28,9 @@ type DataState = {
   arrivals: ArrivalInfo[];
   responsible: ResponsibleGuide[];
   seasonal: SeasonalHighlight[];
+  faqs: FAQItem[];
+  tickets: SupportTicket[];
+  platform: PlatformConfig;
   ready: boolean;
   updateListing: (id: string, patch: Partial<Listing>) => Promise<void>;
   addListing: (l: Listing) => Promise<void>;
@@ -33,6 +38,8 @@ type DataState = {
   addBooking: (b: Booking) => Promise<void>;
   updateBooking: (id: string, patch: Partial<Booking>) => Promise<void>;
   addReview: (r: Review) => Promise<void>;
+  updateReview: (id: string, patch: Partial<Review>) => Promise<void>;
+  deleteReview: (id: string) => Promise<void>;
   addEvent: (e: EventItem) => Promise<void>;
   updateEvent: (id: string, patch: Partial<EventItem>) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
@@ -41,6 +48,7 @@ type DataState = {
   markNotificationRead: (id: string) => Promise<void>;
   addNotification: (n: Notification) => Promise<void>;
   addAudit: (a: AuditEntry) => Promise<void>;
+  addReport: (r: Report) => Promise<void>;
   updateReport: (id: string, patch: Partial<Report>) => Promise<void>;
   updateVillage: (id: string, patch: Partial<Village>) => Promise<void>;
   toggleWishlist: (id: string) => Promise<void>;
@@ -49,6 +57,13 @@ type DataState = {
   upsertArrival: (bookingId: string, patch: Partial<ArrivalInfo>) => Promise<void>;
   addResponsible: (g: ResponsibleGuide) => Promise<void>;
   updateResponsible: (id: string, patch: Partial<ResponsibleGuide>) => Promise<void>;
+  addFAQ: (f: FAQItem) => Promise<void>;
+  updateFAQ: (id: string, patch: Partial<FAQItem>) => Promise<void>;
+  deleteFAQ: (id: string) => Promise<void>;
+  addTicket: (t: SupportTicket) => Promise<void>;
+  updateTicket: (id: string, patch: Partial<SupportTicket>) => Promise<void>;
+  updatePlatform: (patch: Partial<PlatformConfig>) => Promise<void>;
+  resetDemoData: () => Promise<void>;
 };
 
 export const DataContext = createContext<DataState | undefined>(undefined);
@@ -78,6 +93,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [arrivals, setArrivals] = useState<ArrivalInfo[]>(sampleArrivals);
   const [responsible, setResponsible] = useState<ResponsibleGuide[]>(sampleResponsible);
   const [seasonal, setSeasonal] = useState<SeasonalHighlight[]>(sampleSeasonal);
+  const [faqs, setFaqs] = useState<FAQItem[]>(sampleFAQs);
+  const [tickets, setTickets] = useState<SupportTicket[]>(sampleTickets);
+  const [platform, setPlatform] = useState<PlatformConfig>(samplePlatform);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -135,6 +153,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
       setSeasonal(fixedSeasonal);
 
+      setFaqs(await loadOrSeed(KEYS.faqs, sampleFAQs));
+      setTickets(await loadOrSeed(KEYS.tickets, sampleTickets));
+      setPlatform(await loadOrSeed(KEYS.platform, samplePlatform));
+
       setReady(true);
     })();
   }, []);
@@ -177,6 +199,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const avg = forListing.reduce((s, x) => s + x.rating, 0) / forListing.length;
     const nextListings = listings.map((l) => (l.id === r.listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: forListing.length } : l));
     await persist(KEYS.listings, nextListings, setListings);
+  }, [reviews, listings]);
+
+  const updateReview = useCallback(async (id: string, patch: Partial<Review>) => {
+    const next = reviews.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    await persist(KEYS.reviews, next, setReviews);
+    const listingId = next.find((r) => r.id === id)?.listingId;
+    if (listingId) {
+      const visible = next.filter((x) => x.listingId === listingId && !x.hidden);
+      const avg = visible.length ? visible.reduce((s, x) => s + x.rating, 0) / visible.length : 0;
+      const nextListings = listings.map((l) => (l.id === listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: visible.length } : l));
+      await persist(KEYS.listings, nextListings, setListings);
+    }
+  }, [reviews, listings]);
+
+  const deleteReview = useCallback(async (id: string) => {
+    const target = reviews.find((r) => r.id === id);
+    const next = reviews.filter((r) => r.id !== id);
+    await persist(KEYS.reviews, next, setReviews);
+    if (target) {
+      const visible = next.filter((x) => x.listingId === target.listingId && !x.hidden);
+      const avg = visible.length ? visible.reduce((s, x) => s + x.rating, 0) / visible.length : 0;
+      const nextListings = listings.map((l) => (l.id === target.listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: visible.length } : l));
+      await persist(KEYS.listings, nextListings, setListings);
+    }
   }, [reviews, listings]);
 
   const addEvent = useCallback(async (e: EventItem) => {
@@ -223,6 +269,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await persist(KEYS.audit, next, setAudit);
   }, [audit]);
 
+  const addReport = useCallback(async (r: Report) => {
+    const next = [r, ...reports];
+    await persist(KEYS.reports, next, setReports);
+  }, [reports]);
+
   const updateReport = useCallback(async (id: string, patch: Partial<Report>) => {
     const next = reports.map((r) => (r.id === id ? { ...r, ...patch } : r));
     await persist(KEYS.reports, next, setReports);
@@ -266,15 +317,73 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await persist(KEYS.responsible, next, setResponsible);
   }, [responsible]);
 
+  const addFAQ = useCallback(async (f: FAQItem) => {
+    const next = [...faqs, f];
+    await persist(KEYS.faqs, next, setFaqs);
+  }, [faqs]);
+
+  const updateFAQ = useCallback(async (id: string, patch: Partial<FAQItem>) => {
+    const next = faqs.map((f) => (f.id === id ? { ...f, ...patch } : f));
+    await persist(KEYS.faqs, next, setFaqs);
+  }, [faqs]);
+
+  const deleteFAQ = useCallback(async (id: string) => {
+    const next = faqs.filter((f) => f.id !== id);
+    await persist(KEYS.faqs, next, setFaqs);
+  }, [faqs]);
+
+  const addTicket = useCallback(async (t: SupportTicket) => {
+    const next = [t, ...tickets];
+    await persist(KEYS.tickets, next, setTickets);
+  }, [tickets]);
+
+  const updateTicket = useCallback(async (id: string, patch: Partial<SupportTicket>) => {
+    const next = tickets.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    await persist(KEYS.tickets, next, setTickets);
+  }, [tickets]);
+
+  const updatePlatform = useCallback(async (patch: Partial<PlatformConfig>) => {
+    const next = { ...platform, ...patch };
+    await persist(KEYS.platform, next, setPlatform);
+  }, [platform]);
+
+  const resetDemoData = useCallback(async () => {
+    await storage.remove(KEYS.users);
+    await storage.remove(KEYS.listings);
+    await storage.remove(KEYS.bookings);
+    await storage.remove(KEYS.reviews);
+    await storage.remove(KEYS.events);
+    await storage.remove(KEYS.announcements);
+    await storage.remove(KEYS.threads);
+    await storage.remove(KEYS.messages);
+    await storage.remove(KEYS.notifications);
+    await storage.remove(KEYS.audit);
+    await storage.remove(KEYS.reports);
+    await storage.remove(KEYS.villages);
+    await storage.remove(KEYS.wishlist);
+    await storage.remove(KEYS.trips);
+    await storage.remove(KEYS.transport);
+    await storage.remove(KEYS.pickups);
+    await storage.remove(KEYS.arrivals);
+    await storage.remove(KEYS.responsible);
+    await storage.remove(KEYS.seasonal);
+    await storage.remove(KEYS.filters);
+    await storage.remove(KEYS.faqs);
+    await storage.remove(KEYS.tickets);
+    await storage.remove(KEYS.platform);
+  }, []);
+
   return (
     <DataContext.Provider
       value={{
         listings, bookings, reviews, events, announcements, threads, messages, notifications,
         audit, reports, villages, wishlist, transport, pickups, arrivals, responsible, seasonal, ready,
-        updateListing, addListing, deleteListing, addBooking, updateBooking, addReview,
+        faqs, tickets, platform,
+        updateListing, addListing, deleteListing, addBooking, updateBooking, addReview, updateReview, deleteReview,
         addEvent, updateEvent, deleteEvent, addAnnouncement, addMessage, markNotificationRead, addNotification,
-        addAudit, updateReport, updateVillage, toggleWishlist,
+        addAudit, addReport, updateReport, updateVillage, toggleWishlist,
         addPickup, updatePickup, upsertArrival, addResponsible, updateResponsible,
+        addFAQ, updateFAQ, deleteFAQ, addTicket, updateTicket, updatePlatform, resetDemoData,
       }}
     >
       {children}

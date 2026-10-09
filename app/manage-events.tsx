@@ -29,9 +29,11 @@ export default function ManageEvents() {
   const [editing, setEditing] = useState<EventItem | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const assigned = new Set(user?.assignedVillages || []);
+  const assigned = new Set(user?.role === 'admin' ? villages.map((v) => v.id) : (user?.assignedVillages || []));
   const mineEvents = events.filter((e) => assigned.has(e.villageId));
   const filtered = tab === 'all' ? mineEvents : mineEvents.filter((e) => e.status === tab);
+  const liveToTravelers = (e: EventItem) => e.status === 'published' && (e.audience === 'all' || e.audience === 'travelers');
+  const liveCount = mineEvents.filter(liveToTravelers).length;
 
   const [form, setForm] = useState<Partial<EventItem>>({
     audience: 'all', status: 'draft', capacity: 50, type: 'cultural',
@@ -92,6 +94,16 @@ export default function ManageEvents() {
     ]);
   };
 
+  const publish = (e: EventItem) => {
+    showAlert('Publish event?', 'Travelers will see it in discovery.', [
+      { text: t('cancel'), style: 'cancel' },
+      { text: 'Publish', onPress: async () => {
+        await updateEvent(e.id, { status: 'published' });
+        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'publish_event', target: e.title, createdAt: new Date().toISOString() });
+      }},
+    ]);
+  };
+
   return (
     <Screen back title={t('manageEvents')} right={<Pressable onPress={openNew} accessibilityLabel="Create new event"><MaterialIcons name="add" size={24} color={colors.primary} /></Pressable>}>
       <View style={styles.tabs}>
@@ -99,6 +111,7 @@ export default function ManageEvents() {
           <Chip key={s} label={s.charAt(0).toUpperCase() + s.slice(1)} selected={tab === s} onPress={() => setTab(s)} />
         ))}
       </View>
+      <Text style={styles.countLine}>{liveCount} live to travelers · {mineEvents.length - liveCount} hidden from travelers</Text>
       <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
         {filtered.length === 0 ? <EmptyState icon="event" title="No events here" message="Tap + to create a new event." /> : filtered.map((e) => {
           const v = villages.find((x) => x.id === e.villageId);
@@ -108,12 +121,25 @@ export default function ManageEvents() {
                 <Text style={styles.title}>{e.title}</Text>
                 <Badge label={e.status} tone={e.status === 'published' ? 'success' : e.status === 'draft' ? 'muted' : 'danger'} />
               </View>
+              {e.status === 'published' ? (
+                liveToTravelers(e) ? (
+                  <View style={styles.liveRow}>
+                    <MaterialIcons name="visibility" size={16} color={colors.success} />
+                    <Text style={styles.liveText}>Live — shown to travelers in discovery</Text>
+                  </View>
+                ) : (
+                  <View style={[styles.liveRow, { borderColor: colors.border }]}>
+                    <MaterialIcons name="visibility-off" size={16} color={colors.textMuted} />
+                    <Text style={[styles.liveText, { color: colors.textMuted }]}>Hidden from travelers (audience: {e.audience})</Text>
+                  </View>
+                )
+              ) : null}
               <Text style={styles.sub}>{v?.name} · {e.dateFrom}{e.dateFrom !== e.dateTo ? ` → ${e.dateTo}` : ''}</Text>
               <Text style={styles.sub}>Audience: {e.audience} · Capacity {e.capacity}</Text>
               <Text style={styles.desc} numberOfLines={2}>{e.description}</Text>
               <View style={styles.actions}>
                 <Button title={t('edit')} variant="secondary" onPress={() => openEdit(e)} />
-                {e.status === 'draft' ? <Button title="Publish" onPress={() => save('published')} /> : null}
+                {e.status === 'draft' ? <Button title="Publish" onPress={() => publish(e)} /> : null}
                 {e.status === 'published' ? <Button title="Cancel event" variant="danger" onPress={() => cancelEvent(e)} /> : null}
               </View>
             </View>
@@ -163,11 +189,14 @@ export default function ManageEvents() {
 
 const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', gap: spacing.sm, padding: spacing.lg, flexWrap: 'wrap' },
+  countLine: { ...typography.caption, color: colors.textMuted, paddingHorizontal: spacing.lg, marginTop: -spacing.sm },
   card: { backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: spacing.md, marginBottom: spacing.md, gap: 4 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between' },
   title: { ...typography.bodyBold, color: colors.text, flex: 1 },
   sub: { ...typography.caption, color: colors.textMuted },
   desc: { ...typography.small, color: colors.text, marginTop: 4 },
+  liveRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.bgAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.success, paddingHorizontal: spacing.sm, paddingVertical: 6 },
+  liveText: { ...typography.smallBold, color: colors.success, flex: 1 },
   actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, justifyContent: 'flex-end', flexWrap: 'wrap' },
   label: { ...typography.smallBold, color: colors.text, marginTop: spacing.md, marginBottom: 6 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },

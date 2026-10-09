@@ -8,7 +8,7 @@ export default function NotFoundScreen() {
     <SafeAreaView style={styles.container}>
       <LinearGradient
         colors={['#0a0a0a', '#1a1a1a']}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
       />
       
       <View style={styles.content}>

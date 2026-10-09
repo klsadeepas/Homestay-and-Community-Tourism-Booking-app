@@ -1,5 +1,6 @@
 import React, { createContext, useEffect, useState, ReactNode, useCallback } from 'react';
 import { storage, KEYS } from '@/services/storage';
+import { syncFromRemote } from '@/services/sync';
 import { sampleUsers, SampleUser } from '@/constants/sampleData';
 import { Role } from '@/services/types';
 
@@ -24,6 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      await syncFromRemote();
       let storedUsers = await storage.get<SampleUser[]>(KEYS.users);
       if (!storedUsers) {
         storedUsers = sampleUsers;

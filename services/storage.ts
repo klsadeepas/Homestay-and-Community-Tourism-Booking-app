@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyWrite } from './sync';
 
 export const storage = {
   async get<T>(key: string): Promise<T | null> {
@@ -6,9 +7,11 @@ export const storage = {
   },
   async set<T>(key: string, value: T): Promise<void> {
     try { await AsyncStorage.setItem(key, JSON.stringify(value)); } catch {}
+    notifyWrite(key, value);
   },
   async remove(key: string): Promise<void> {
     try { await AsyncStorage.removeItem(key); } catch {}
+    notifyWrite(key, null);
   },
 };
 

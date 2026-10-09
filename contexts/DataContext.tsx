@@ -1,5 +1,6 @@
 import React, { createContext, useEffect, useState, ReactNode, useCallback } from 'react';
 import { storage, KEYS } from '@/services/storage';
+import { syncFromRemote } from '@/services/sync';
 import {
   Listing, Booking, Review, EventItem, Announcement, Thread, Message, Notification, AuditEntry, Report, Village,
   TransportInfo, PickupRequest, ArrivalInfo, ResponsibleGuide, SeasonalHighlight,
@@ -100,6 +101,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      await syncFromRemote();
       const storedListings = await loadOrSeed(KEYS.listings, sampleListings);
       const fixedListings = storedListings.map((l) =>
         l.id === 'l-1' && (l.photo?.includes('photo-1587874522487') || !l.photo)

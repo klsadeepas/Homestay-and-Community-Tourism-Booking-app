@@ -28,8 +28,8 @@ export function VillageCard({ village, onPress }: Props) {
 
 const styles = StyleSheet.create({
   card: { width: 220, height: 140, borderRadius: radius.lg, overflow: 'hidden', marginRight: spacing.md, ...shadow.sm },
-  image: { ...StyleSheet.absoluteFillObject },
-  overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)' },
+  image: { ...StyleSheet.absoluteFill },
+  overlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.25)' },
   body: { position: 'absolute', bottom: 12, left: 12, right: 12 },
   title: { ...typography.h3, color: '#fff' },
   sub: { ...typography.small, color: '#F3EADA' },

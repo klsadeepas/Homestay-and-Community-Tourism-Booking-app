@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useAlert } from '@/template';
+import { isCloudSyncEnabled } from '@/services/sync';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 export default function AdminSystem() {
@@ -20,6 +21,7 @@ export default function AdminSystem() {
     supportEmail: platform.supportEmail,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const cloudSync = isCloudSyncEnabled();
 
   const save = async () => {
     const e: Record<string, string> = {};
@@ -75,6 +77,14 @@ export default function AdminSystem() {
             <Text style={styles.rowText}>Authentication & accounts</Text>
             <Badge label="OK" tone="success" />
           </View>
+          <View style={styles.rowLine}>
+            <MaterialIcons name={cloudSync ? 'cloud-done' : 'cloud-off'} size={20} color={cloudSync ? colors.success : colors.warning} />
+            <Text style={styles.rowText}>Cloud database (Supabase)</Text>
+            <Badge label={cloudSync ? 'synced' : 'offline'} tone={cloudSync ? 'success' : 'warning'} />
+          </View>
+          {cloudSync ? (
+            <Text style={styles.foot}>App data syncs to the Supabase cloud; other devices see changes after restarting the app.</Text>
+          ) : null}
           <View style={styles.rowLine}>
             <MaterialIcons name="info" size={20} color={colors.warning} />
             <Text style={styles.rowText}>Payments gateway</Text>

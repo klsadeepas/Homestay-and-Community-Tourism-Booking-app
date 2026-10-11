@@ -7,23 +7,26 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Chip';
 import { Input } from '@/components/ui/Input';
+import { PhotoField } from '@/components/ui/PhotoField';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useAlert } from '@/template';
+import { csv, email as emailRule, hasErrors, password as passwordRule, phone as phoneRule, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 type StatusFilter = 'all' | 'active' | 'pending' | 'suspended';
+const WORD = /^[A-Za-zÀ-ɏ'’ -]{2,30}$/;
 
 export default function AdminGuides() {
-  const { users, user, updateUser, addUser } = useAuth();
-  const { listings, addAudit } = useData();
+  const { users, updateUser, addUser } = useAuth();
+  const { listings, logAction } = useData();
   const { showAlert } = useAlert();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', password: '', phone: '', village: '', languages: '', experience: '', bio: '' });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [form, setForm] = useState({ name: '', email: '', password: '', phone: '', village: '', languages: '', experience: '', bio: '', photo: '' });
+  const [errors, setErrors] = useState<Errors>({});
 
   const guides = users.filter((u) => u.role === 'guide');
   const filtered = guides.filter((g) => {
@@ -34,15 +37,18 @@ export default function AdminGuides() {
 
   const activityCount = (id: string) => listings.filter((l) => l.ownerId === id && (l.type === 'tour' || l.type === 'experience')).length;
 
-  const validate = () => {
-    const e: Record<string, string> = {};
-    if (!form.name.trim()) e.name = 'Name is required';
-    if (!form.email.trim()) e.email = 'Email is required';
-    else if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) e.email = 'Enter a valid email';
-    if (!form.password.trim()) e.password = 'Password is required';
-    else if (form.password.length < 6) e.password = 'At least 6 characters';
+  const validate = (): boolean => {
+    const e: Errors = {};
+    e.name = required(form.name, 'Name') || textLength(form.name, 'Name', 3, 80);
+    e.email = required(form.email, 'Email') || emailRule(form.email);
+    e.password = required(form.password, 'Password') || passwordRule(form.password, 6);
+    e.phone = phoneRule(form.phone, 'Phone');
+    e.village = textLength(form.village, 'Home village', 0, 80);
+    e.languages = csv(form.languages, 'Languages', (item) => (WORD.test(item) ? '' : `"${item}" is not a valid language name.`));
+    e.experience = textLength(form.experience, 'Experience', 0, 500);
+    e.bio = textLength(form.bio, 'Bio', 0, 500);
     setErrors(e);
-    return Object.keys(e).length === 0;
+    return !hasErrors(e);
   };
 
   const save = async () => {
@@ -57,12 +63,15 @@ export default function AdminGuides() {
       languagesSpoken: form.languages.split(',').map((s) => s.trim()).filter(Boolean),
       experience: form.experience.trim() || undefined,
       bio: form.bio.trim() || undefined,
+      photo: form.photo || undefined,
       status: 'active',
     });
     if (!res.ok) { setErrors({ email: res.error || 'Failed to add guide' }); return; }
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'add_guide', target: form.name.trim(), createdAt: new Date().toISOString() });
+    await logAction('guide_added', `${form.name.trim()} · ${form.email.trim()}`, form.village.trim() ? `village=${form.village.trim()}` : undefined);
     setOpen(false);
-    setForm({ name: '', email: '', password: '', phone: '', village: '', languages: '', experience: '', bio: '' });
+    setForm({ name: '', email: '', password: '', phone: '', village: '', languages: '', experience: '', bio: '', photo: '' });
+    setErrors({});
+    showAlert('Guide added', `${form.name.trim()} can now sign in with this email and password.`);
   };
 
   const approve = (id: string, name: string) => {
@@ -70,7 +79,7 @@ export default function AdminGuides() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Approve', onPress: async () => {
         await updateUser(id, { status: 'active' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'approve_guide', target: name, createdAt: new Date().toISOString() });
+        await logAction('guide_approved', name);
       }},
     ]);
   };
@@ -80,7 +89,7 @@ export default function AdminGuides() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Suspend', style: 'destructive', onPress: async () => {
         await updateUser(id, { status: 'suspended' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'suspend_guide', target: name, createdAt: new Date().toISOString() });
+        await logAction('guide_suspended', name);
       }},
     ]);
   };
@@ -90,7 +99,7 @@ export default function AdminGuides() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reinstate', onPress: async () => {
         await updateUser(id, { status: 'active' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'reinstate_guide', target: name, createdAt: new Date().toISOString() });
+        await logAction('guide_reinstated', name);
       }},
     ]);
   };
@@ -144,12 +153,13 @@ export default function AdminGuides() {
             <ScrollView contentContainerStyle={{ padding: spacing.lg }} keyboardShouldPersistTaps="handled">
               <Input label="Full name *" value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} error={errors.name} />
               <Input label="Email *" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoCapitalize="none" error={errors.email} />
-              <Input label="Password *" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry error={errors.password} helper="Min 6 characters; share with the guide" />
-              <Input label="Phone" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} keyboardType="phone-pad" />
-              <Input label="Home village" value={form.village} onChangeText={(v) => setForm({ ...form, village: v })} />
-              <Input label="Languages spoken" value={form.languages} onChangeText={(v) => setForm({ ...form, languages: v })} helper="Comma separated, e.g. English, Sinhala" />
-              <Input label="Experience" value={form.experience} onChangeText={(v) => setForm({ ...form, experience: v })} />
-              <Input label="Bio" value={form.bio} onChangeText={(v) => setForm({ ...form, bio: v })} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} />
+              <Input label="Password *" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry error={errors.password} helper="Min 6 characters, no spaces; share with the guide" />
+              <Input label="Phone" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} keyboardType="phone-pad" error={errors.phone} helper="e.g. 077 123 4567" />
+              <Input label="Home village" value={form.village} onChangeText={(v) => setForm({ ...form, village: v })} error={errors.village} />
+              <Input label="Languages spoken" value={form.languages} onChangeText={(v) => setForm({ ...form, languages: v })} error={errors.languages} helper="Comma separated, e.g. English, Sinhala" />
+              <Input label="Experience" value={form.experience} onChangeText={(v) => setForm({ ...form, experience: v })} error={errors.experience} />
+              <Input label="Bio" value={form.bio} onChangeText={(v) => setForm({ ...form, bio: v })} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} error={errors.bio} />
+              <PhotoField label="Guide photo" value={form.photo} onChange={(v) => setForm({ ...form, photo: v })} folder="profiles" allowCamera helper="Optional — choose from this phone so travelers can recognise the guide." />
               <View style={styles.actions}>
                 <Button title="Cancel" variant="ghost" onPress={() => setOpen(false)} />
                 <Button title="Add guide" onPress={save} />

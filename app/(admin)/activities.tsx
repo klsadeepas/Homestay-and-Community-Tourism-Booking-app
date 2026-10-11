@@ -25,14 +25,15 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 
 export default function AdminActivities() {
   const router = useRouter();
-  const { users, user } = useAuth();
-  const { listings, bookings, villages, addListing, updateListing, deleteListing, addAudit } = useData();
+  const { users } = useAuth();
+  const { listings, bookings, villages, addListing, updateListing, deleteListing, logAction } = useData();
   const { currency } = useSettings();
   const { showAlert } = useAlert();
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [guidePicker, setGuidePicker] = useState<Listing | null>(null);
   const [pickedGuide, setPickedGuide] = useState('');
+  const [assignErr, setAssignErr] = useState('');
 
   const guides = users.filter((u) => u.role === 'guide');
   const activities = listings.filter((l) => l.type === 'tour' || l.type === 'experience');
@@ -48,7 +49,7 @@ export default function AdminActivities() {
     (l.scheduleSlots || []).filter((s) => s.date >= todayStr()).sort((a, b) => a.date.localeCompare(b.date))[0];
   const bookingCount = (l: Listing) => bookings.filter((b) => b.listingId === l.id).length;
 
-  const create = (type: 'tour' | 'experience') => {
+  const create = async (type: 'tour' | 'experience') => {
     const owner = guides.find((g) => g.status === 'active') || guides[0];
     if (!owner) { showAlert('No guides', 'Add a local guide first, then assign activities.'); return; }
     const base: Listing = {
@@ -72,8 +73,8 @@ export default function AdminActivities() {
       scheduleSlots: [],
       ...(type === 'tour' ? { difficulty: 'Easy' as const } : { experienceCategory: 'craft' as const }),
     };
-    addListing(base);
-    addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'create_activity', target: base.title, reason: `type=${type}`, createdAt: new Date().toISOString() });
+    await addListing(base);
+    await logAction('activity_created', `${base.title} · ${base.id}`, `type=${type}, guide=${owner.name}`);
     router.push({ pathname: '/listing/[id]', params: { id: base.id, edit: '1' } });
   };
 
@@ -82,7 +83,7 @@ export default function AdminActivities() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Approve', onPress: async () => {
         await updateListing(l.id, { status: 'approved', reviewReason: undefined });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'approve_activity', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('activity_approved', `${l.title} · ${l.id}`);
       }},
     ]);
   };
@@ -92,7 +93,7 @@ export default function AdminActivities() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Suspend', style: 'destructive', onPress: async () => {
         await updateListing(l.id, { status: 'suspended' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'suspend_activity', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('activity_suspended', `${l.title} · ${l.id}`);
       }},
     ]);
   };
@@ -102,7 +103,7 @@ export default function AdminActivities() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reinstate', onPress: async () => {
         await updateListing(l.id, { status: 'approved' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'reinstate_activity', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('activity_reinstated', `${l.title} · ${l.id}`);
       }},
     ]);
   };
@@ -112,7 +113,7 @@ export default function AdminActivities() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         await deleteListing(l.id);
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'delete_activity', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('activity_deleted', `${l.title} · ${l.id}`);
       }},
     ]);
   };
@@ -120,13 +121,16 @@ export default function AdminActivities() {
   const openGuidePicker = (l: Listing) => {
     setGuidePicker(l);
     setPickedGuide(l.ownerId);
+    setAssignErr('');
   };
 
   const saveGuide = async () => {
     if (!guidePicker) return;
+    if (!pickedGuide) { setAssignErr('Choose a guide to assign this activity to.'); return; }
     const g = users.find((u) => u.id === pickedGuide);
+    if (!g) { setAssignErr('That guide account no longer exists.'); return; }
     await updateListing(guidePicker.id, { ownerId: pickedGuide });
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'assign_guide', target: guidePicker.title, reason: g?.name, createdAt: new Date().toISOString() });
+    await logAction('guide_assigned', `${guidePicker.title} · ${guidePicker.id}`, `guide=${g.name}`);
     setGuidePicker(null);
   };
 
@@ -225,6 +229,7 @@ export default function AdminActivities() {
               <Button title="Cancel" variant="ghost" onPress={() => setGuidePicker(null)} />
               <Button title="Save" onPress={saveGuide} disabled={!pickedGuide} />
             </View>
+            {assignErr ? <Text style={styles.errText}>{assignErr}</Text> : null}
           </ScrollView>
         </Screen>
       </Modal>
@@ -248,6 +253,7 @@ const styles = StyleSheet.create({
   reasonText: { ...typography.caption, color: colors.warning, flex: 1 },
   actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, flexWrap: 'wrap', justifyContent: 'flex-end' },
   hint: { ...typography.small, color: colors.textMuted, marginBottom: spacing.md },
+  errText: { ...typography.caption, color: colors.danger, marginTop: spacing.sm },
   guideOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm },
   guideOptionActive: { borderColor: colors.primary, backgroundColor: colors.bgAlt },
   guideName: { ...typography.bodyBold, color: colors.text },

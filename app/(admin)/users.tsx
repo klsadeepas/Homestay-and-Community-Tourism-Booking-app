@@ -15,7 +15,7 @@ const ROLES: Role[] = ['traveler','owner','guide','coordinator','admin'];
 
 export default function AdminUsers() {
   const { users, user, updateUser } = useAuth();
-  const { addAudit } = useData();
+  const { logAction } = useData();
   const { showAlert } = useAlert();
   const [q, setQ] = useState('');
   const [role, setRole] = useState<Role | 'all'>('all');
@@ -31,7 +31,7 @@ export default function AdminUsers() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Suspend', style: 'destructive', onPress: async () => {
         await updateUser(id, { status: 'suspended' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'suspend_user', target: name, createdAt: new Date().toISOString() });
+        await logAction('suspend_user', name);
       }},
     ]);
   };
@@ -41,7 +41,7 @@ export default function AdminUsers() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reinstate', onPress: async () => {
         await updateUser(id, { status: 'active' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'reinstate_user', target: name, createdAt: new Date().toISOString() });
+        await logAction('reinstate_user', name);
       }},
     ]);
   };
@@ -51,7 +51,7 @@ export default function AdminUsers() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Grant', onPress: async () => {
         await updateUser(id, { role: 'coordinator', status: 'active' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'grant_coordinator', target: name, reason: 'Admin promotion', createdAt: new Date().toISOString() });
+        await logAction('grant_coordinator', name, 'Admin promotion');
       }},
     ]);
   };

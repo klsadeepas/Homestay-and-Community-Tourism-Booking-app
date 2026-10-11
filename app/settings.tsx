@@ -4,6 +4,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { useSettings } from '@/hooks/useSettings';
 import { useAuth } from '@/hooks/useAuth';
+import { useData } from '@/hooks/useData';
+import { isCloudSyncEnabled } from '@/services/sync';
 import { Lang } from '@/constants/i18n';
 import { Currency, DEMO_RATE_UPDATED_AT, LKR_PER_USD } from '@/services/currency';
 import { colors, radius, spacing, typography } from '@/constants/theme';
@@ -11,6 +13,8 @@ import { colors, radius, spacing, typography } from '@/constants/theme';
 export default function Settings() {
   const { language, currency, setLanguage, setCurrency, t } = useSettings();
   const { user, updateProfile } = useAuth();
+  const { live } = useData();
+  const cloudConfigured = isCloudSyncEnabled();
 
   const Toggle = ({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) => (
     <View style={styles.row}>
@@ -58,6 +62,11 @@ export default function Settings() {
           <View style={styles.row}><MaterialIcons name="map" size={20} color={colors.warning} /><Text style={styles.rowLabel}>Maps</Text><Text style={styles.pill}>Not connected</Text></View>
           <View style={styles.row}><MaterialIcons name="translate" size={20} color={colors.warning} /><Text style={styles.rowLabel}>Translation service</Text><Text style={styles.pill}>Not connected</Text></View>
           <View style={styles.row}><MaterialIcons name="attach-money" size={20} color={colors.warning} /><Text style={styles.rowLabel}>Exchange rates</Text><Text style={styles.pill}>Demo rate</Text></View>
+          <View style={styles.row}>
+            <MaterialIcons name={live ? 'cloud-done' : 'cloud-off'} size={20} color={live ? colors.success : colors.warning} />
+            <Text style={styles.rowLabel}>Shared database</Text>
+            <Text style={styles.pill}>{live ? 'Live · tables' : cloudConfigured ? 'Offline / not local tables' : 'Not configured'}</Text>
+          </View>
         </View>
       </ScrollView>
     </Screen>

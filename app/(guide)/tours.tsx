@@ -18,7 +18,7 @@ import { colors, radius, spacing, typography } from '@/constants/theme';
 export default function GuideTours() {
   const router = useRouter();
   const { user } = useAuth();
-  const { listings, bookings, addListing, updateListing, deleteListing } = useData();
+  const { listings, bookings, addListing, updateListing, deleteListing, logAction } = useData();
   const { t, currency } = useSettings();
   const { showAlert } = useAlert();
 
@@ -39,20 +39,21 @@ export default function GuideTours() {
       status: 'draft', accessibility: { mobility: [], bathroom: [], food: [] },
     };
     await addListing(base);
+    await logAction('tour_created', `${base.title} · ${base.id}`);
     showAlert('Draft created', 'Edit the details and submit for review.');
   };
 
   const submit = (id: string) => {
     showAlert('Submit for review?', 'Coordinators will review this listing.', [
       { text: t('cancel'), style: 'cancel' },
-      { text: 'Submit', onPress: () => updateListing(id, { status: 'submitted' }) },
+      { text: 'Submit', onPress: async () => { await updateListing(id, { status: 'submitted' }); await logAction('tour_submitted', id); } },
     ]);
   };
 
   const remove = (id: string) => {
     showAlert('Delete?', 'This cannot be undone.', [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('delete'), style: 'destructive', onPress: () => deleteListing(id) },
+      { text: t('delete'), style: 'destructive', onPress: async () => { await deleteListing(id); await logAction('tour_deleted', id); } },
     ]);
   };
 

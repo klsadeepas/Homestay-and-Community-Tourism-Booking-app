@@ -1,6 +1,11 @@
 import React, { createContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react';
-import { storage, KEYS } from '@/services/storage';
-import { syncFromRemote, addRemoteChangeListener } from '@/services/sync';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { KEYS } from '@/services/storage';
+import {
+  CollectionKey, fetchCollection, writeItem, removeRow, flushPending,
+  addTableChangeListener, isTableBackendReady, startTableLiveStream, startTablePolling,
+} from '@/services/db';
+import { useAuth } from '@/hooks/useAuth';
 import {
   Listing, Booking, Review, EventItem, Announcement, Thread, Message, Notification, AuditEntry, Report, Village,
   TransportInfo, PickupRequest, ArrivalInfo, ResponsibleGuide, SeasonalHighlight,
@@ -33,6 +38,7 @@ type DataState = {
   tickets: SupportTicket[];
   platform: PlatformConfig;
   ready: boolean;
+  live: boolean;
   updateListing: (id: string, patch: Partial<Listing>) => Promise<void>;
   addListing: (l: Listing) => Promise<void>;
   deleteListing: (id: string) => Promise<void>;
@@ -49,6 +55,7 @@ type DataState = {
   markNotificationRead: (id: string) => Promise<void>;
   addNotification: (n: Notification) => Promise<void>;
   addAudit: (a: AuditEntry) => Promise<void>;
+  logAction: (action: string, target: string, reason?: string) => Promise<void>;
   addReport: (r: Report) => Promise<void>;
   updateReport: (id: string, patch: Partial<Report>) => Promise<void>;
   updateVillage: (id: string, patch: Partial<Village>) => Promise<void>;
@@ -64,19 +71,58 @@ type DataState = {
   addTicket: (t: SupportTicket) => Promise<void>;
   updateTicket: (id: string, patch: Partial<SupportTicket>) => Promise<void>;
   updatePlatform: (patch: Partial<PlatformConfig>) => Promise<void>;
+  refreshAll: () => Promise<void>;
   resetDemoData: () => Promise<void>;
 };
 
 export const DataContext = createContext<DataState | undefined>(undefined);
 
-async function loadOrSeed<T>(key: string, seed: T): Promise<T> {
-  const stored = await storage.get<T>(key);
-  if (stored !== null && stored !== undefined) return stored;
-  await storage.set(key, seed);
-  return seed;
+// AsyncStorage is now only the on-device cache (offline reads, wishlist, session).
+// The source of truth is the Supabase tables, one row per record.
+async function cacheGet<T>(storageKey: string): Promise<T | null> {
+  try {
+    const raw = await AsyncStorage.getItem(storageKey);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch { return null; }
+}
+async function cacheSet<T>(storageKey: string, value: T): Promise<void> {
+  try { await AsyncStorage.setItem(storageKey, JSON.stringify(value)); } catch {}
 }
 
+const ALL_STORAGE_KEYS: Record<CollectionKey, string> = {
+  users: KEYS.users,
+  villages: KEYS.villages,
+  listings: KEYS.listings,
+  bookings: KEYS.bookings,
+  reviews: KEYS.reviews,
+  events: KEYS.events,
+  announcements: KEYS.announcements,
+  threads: KEYS.threads,
+  messages: KEYS.messages,
+  notifications: KEYS.notifications,
+  audit: KEYS.audit,
+  reports: KEYS.reports,
+  transport: KEYS.transport,
+  pickups: KEYS.pickups,
+  arrivals: KEYS.arrivals,
+  responsible: KEYS.responsible,
+  seasonal: KEYS.seasonal,
+  faqs: KEYS.faqs,
+  tickets: KEYS.tickets,
+  platform: KEYS.platform,
+};
+
+// 'users' belongs to AuthContext; 'platform' is a single row, not a list.
+const STORAGE_KEYS = ALL_STORAGE_KEYS;
+const LIST_KEYS: CollectionKey[] = (Object.keys(STORAGE_KEYS) as CollectionKey[])
+  .filter((k) => k !== 'users' && k !== 'platform');
+const SYNC_KEYS: CollectionKey[] = [...LIST_KEYS, 'platform'];
+
 export function DataProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const userRef = useRef(user);
+  userRef.current = user;
+
   const [listings, setListings] = useState<Listing[]>(sampleListings);
   const [bookings, setBookings] = useState<Booking[]>(sampleBookings);
   const [reviews, setReviews] = useState<Review[]>(sampleReviews);
@@ -98,356 +144,413 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [tickets, setTickets] = useState<SupportTicket[]>(sampleTickets);
   const [platform, setPlatform] = useState<PlatformConfig>(samplePlatform);
   const [ready, setReady] = useState(false);
+  const [live, setLive] = useState(false);
   const readyRef = useRef(false);
-  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingLive = useRef<Set<CollectionKey>>(new Set());
 
-  // Re-reads every synced key from AsyncStorage into React state — the same
-  // values a fresh app start would show. Used for live cross-device refresh.
-  const reloadAllFromStorage = useCallback(async () => {
-    const [l, b, r, e, an, th, me, no, au, rep, vi, wi, tr, pi, ar, rg, se, fq, ti, pf] =
-      await Promise.all([
-        loadOrSeed(KEYS.listings, sampleListings),
-        loadOrSeed(KEYS.bookings, sampleBookings),
-        loadOrSeed(KEYS.reviews, sampleReviews),
-        loadOrSeed(KEYS.events, sampleEvents),
-        loadOrSeed(KEYS.announcements, sampleAnnouncements),
-        loadOrSeed(KEYS.threads, sampleThreads),
-        loadOrSeed(KEYS.messages, sampleMessages),
-        loadOrSeed(KEYS.notifications, sampleNotifications),
-        loadOrSeed(KEYS.audit, sampleAudit),
-        loadOrSeed(KEYS.reports, sampleReports),
-        loadOrSeed(KEYS.villages, sampleVillages),
-        loadOrSeed(KEYS.wishlist, [] as string[]),
-        loadOrSeed(KEYS.transport, sampleTransport),
-        loadOrSeed(KEYS.pickups, samplePickups),
-        loadOrSeed(KEYS.arrivals, sampleArrivals),
-        loadOrSeed(KEYS.responsible, sampleResponsible),
-        loadOrSeed(KEYS.seasonal, sampleSeasonal),
-        loadOrSeed(KEYS.faqs, sampleFAQs),
-        loadOrSeed(KEYS.tickets, sampleTickets),
-        loadOrSeed(KEYS.platform, samplePlatform),
-      ]);
-    setListings(l);
-    setBookings(b);
-    setReviews(r);
-    setEvents(e);
-    setAnnouncements(an);
-    setThreads(th);
-    setMessages(me);
-    setNotifications(no);
-    setAudit(au);
-    setReports(rep);
-    setVillages(vi);
-    setWishlist(wi);
-    setTransport(tr);
-    setPickups(pi);
-    setArrivals(ar);
-    setResponsible(rg);
-    setSeasonal(se);
-    setFaqs(fq);
-    setTickets(ti);
-    setPlatform(pf);
+  // Latest state per collection, so a mutation that chains several writes (a
+  // review also recomputes a listing rating) never reads a stale array.
+  const stateRef = useRef<Record<string, unknown>>({});
+  const settersRef = useRef<Record<string, (v: never) => void>>({});
+  const setCollection = useCallback(<T,>(key: CollectionKey, value: T) => {
+    stateRef.current[key] = value;
+    settersRef.current[key]?.(value as never);
   }, []);
 
-  // Live refresh: whenever another device writes to the cloud, reload state
-  // from storage so screens update without an app restart. Debounced so a
-  // burst of remote keys settles into one reload.
-  useEffect(() => {
-    return addRemoteChangeListener(() => {
-      if (!readyRef.current) return;
-      if (reloadTimer.current) clearTimeout(reloadTimer.current);
-      reloadTimer.current = setTimeout(() => { void reloadAllFromStorage(); }, 250);
-    });
-  }, [reloadAllFromStorage]);
+  const seedFor: Partial<Record<CollectionKey, unknown[]>> = {
+    listings: sampleListings, bookings: sampleBookings, reviews: sampleReviews,
+    events: sampleEvents, announcements: sampleAnnouncements, threads: sampleThreads,
+    messages: sampleMessages, notifications: sampleNotifications, audit: sampleAudit,
+    reports: sampleReports, villages: sampleVillages, transport: sampleTransport,
+    pickups: samplePickups, arrivals: sampleArrivals, responsible: sampleResponsible,
+    seasonal: sampleSeasonal, faqs: sampleFAQs, tickets: sampleTickets,
+  };
 
+  // Loads one collection: cloud table -> device cache -> demo seed. When the
+  // table is reachable but empty on a fresh install, the seed rows are pushed so
+  // a brand-new project starts with the same sample content the app shows.
+  const loadOne = useCallback(async (key: CollectionKey) => {
+    const storageKey = STORAGE_KEYS[key];
+
+    if (key === 'platform') {
+      const remote = await fetchCollection<PlatformConfig>('platform');
+      if (remote) {
+        const value = remote[0] ?? samplePlatform;
+        if (!remote.length) await writeItem('platform', value);
+        setCollection('platform', value);
+        await cacheSet(storageKey, value);
+        return;
+      }
+      const cached = await cacheGet<PlatformConfig>(storageKey);
+      if (cached) setCollection('platform', cached);
+      return;
+    }
+
+    const remote = await fetchCollection(key);
+    if (remote) {
+      if (remote.length === 0 && !stateRef.current[`${key}:seeded`]) {
+        const local = await cacheGet<unknown[]>(storageKey);
+        const seed = seedFor[key];
+        if (seed && seed.length && (!local || !local.length)) {
+          stateRef.current[`${key}:seeded`] = true;
+          setCollection(key, seed);
+          for (const item of seed) await writeItem(key, item);
+          await cacheSet(storageKey, seed);
+          return;
+        }
+      }
+      setCollection(key, remote);
+      await cacheSet(storageKey, remote);
+      return;
+    }
+    // No cloud (offline build, or schema_v2.sql not applied yet): device copy.
+    const cached = await cacheGet<unknown[]>(storageKey);
+    if (cached && cached.length) setCollection(key, cached);
+    else if (seedFor[key]) setCollection(key, seedFor[key]);
+  }, [setCollection]);
+
+  // One collection's list, its changed rows written to the table, and the device
+  // cache refreshed. Removed ids are deleted from the table too.
+  const commit = useCallback(async (
+    key: CollectionKey,
+    next: unknown[],
+    changed: unknown[] = [],
+    removedIds: string[] = [],
+  ) => {
+    setCollection(key, next);
+    await cacheSet(STORAGE_KEYS[key], next);
+    for (const item of changed) await writeItem(key, item);
+    for (const id of removedIds) await removeRow(key, id);
+  }, [setCollection]);
+
+  const refreshKeys = useCallback(async (keys: CollectionKey[]) => {
+    for (const key of keys) await loadOne(key);
+  }, [loadOne]);
+
+  // Boot: pull every table, then let the live stream take over.
   useEffect(() => {
     (async () => {
-      await syncFromRemote();
-      const storedListings = await loadOrSeed(KEYS.listings, sampleListings);
-      const fixedListings = storedListings.map((l) =>
-        l.id === 'l-1' && (l.photo?.includes('photo-1587874522487') || !l.photo)
-          ? { ...l, photo: sampleListings.find((s) => s.id === 'l-1')?.photo || l.photo }
-          : l
-      );
-      if (JSON.stringify(fixedListings) !== JSON.stringify(storedListings)) {
-        await storage.set(KEYS.listings, fixedListings);
-      }
-      setListings(fixedListings);
-
-      setBookings(await loadOrSeed(KEYS.bookings, sampleBookings));
-      setReviews(await loadOrSeed(KEYS.reviews, sampleReviews));
-      setEvents(await loadOrSeed(KEYS.events, sampleEvents));
-      setAnnouncements(await loadOrSeed(KEYS.announcements, sampleAnnouncements));
-      setThreads(await loadOrSeed(KEYS.threads, sampleThreads));
-      setMessages(await loadOrSeed(KEYS.messages, sampleMessages));
-      setNotifications(await loadOrSeed(KEYS.notifications, sampleNotifications));
-      setAudit(await loadOrSeed(KEYS.audit, sampleAudit));
-      setReports(await loadOrSeed(KEYS.reports, sampleReports));
-
-      const storedVillages = await loadOrSeed(KEYS.villages, sampleVillages);
-      const fixedVillages = storedVillages.map((v) => {
-        const seedVillage = sampleVillages.find((sv) => sv.id === v.id);
-        if (seedVillage && (v.photo?.includes('photo-1588416499018') || !v.photo)) {
-          return { ...v, photo: seedVillage.photo };
-        }
-        return v;
-      });
-      if (JSON.stringify(fixedVillages) !== JSON.stringify(storedVillages)) {
-        await storage.set(KEYS.villages, fixedVillages);
-      }
-      setVillages(fixedVillages);
-
-      setWishlist(await loadOrSeed(KEYS.wishlist, [] as string[]));
-      setTransport(await loadOrSeed(KEYS.transport, sampleTransport));
-      setPickups(await loadOrSeed(KEYS.pickups, samplePickups));
-      setArrivals(await loadOrSeed(KEYS.arrivals, sampleArrivals));
-      setResponsible(await loadOrSeed(KEYS.responsible, sampleResponsible));
-
-      const storedSeasonal = await loadOrSeed(KEYS.seasonal, sampleSeasonal);
-      const fixedSeasonal = storedSeasonal.map((s) => {
-        const seedSeasonal = sampleSeasonal.find((ss) => ss.id === s.id);
-        if (seedSeasonal && (s.photo?.includes('photo-1588416499018') || !s.photo)) {
-          return { ...s, photo: seedSeasonal.photo };
-        }
-        return s;
-      });
-      if (JSON.stringify(fixedSeasonal) !== JSON.stringify(storedSeasonal)) {
-        await storage.set(KEYS.seasonal, fixedSeasonal);
-      }
-      setSeasonal(fixedSeasonal);
-
-      setFaqs(await loadOrSeed(KEYS.faqs, sampleFAQs));
-      setTickets(await loadOrSeed(KEYS.tickets, sampleTickets));
-      setPlatform(await loadOrSeed(KEYS.platform, samplePlatform));
-
+      const wl = await cacheGet<string[]>(KEYS.wishlist);
+      setWishlist(Array.isArray(wl) ? wl : []);
+      await Promise.all(SYNC_KEYS.map((k) => loadOne(k)));
+      void flushPending();
+      setLive(isTableBackendReady());
       readyRef.current = true;
       setReady(true);
     })();
-  }, []);
+  }, [loadOne]);
 
-  const persist = async <T,>(key: string, value: T, setter: (v: T) => void) => {
-    setter(value);
-    await storage.set(key, value);
-  };
+  // Live refresh: any row written on any device refetches just its collection
+  // (debounced), so open screens update without a restart.
+  useEffect(() => {
+    startTableLiveStream();
+    startTablePolling(() => { if (readyRef.current) void refreshKeys(SYNC_KEYS); }, 30000);
+    return addTableChangeListener((keys) => {
+      if (!readyRef.current) return;
+      setLive(true);
+      keys.forEach((k) => pendingLive.current.add(k));
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => {
+        const todo = [...pendingLive.current];
+        pendingLive.current.clear();
+        void refreshKeys(todo);
+      }, 250);
+    });
+  }, [refreshKeys]);
 
+  // Coming back to the foreground is the other moment a phone has been offline;
+  // replay queued writes and pull whatever changed.
+  useEffect(() => {
+    const onFocus = () => {
+      if (!readyRef.current) return;
+      void flushPending();
+      void refreshKeys(SYNC_KEYS);
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocus);
+      return () => document.removeEventListener('visibilitychange', onFocus);
+    }
+    return undefined;
+  }, [refreshKeys]);
+
+  // ---------------------------------------------------------------- audit
+  const addAudit = useCallback(async (a: AuditEntry) => {
+    const entry: AuditEntry = { ...a, createdAt: a.createdAt || new Date().toISOString() };
+    const next = [entry, ...((stateRef.current.audit as AuditEntry[]) ?? [])];
+    await commit('audit', next, [entry]);
+  }, [commit]);
+
+  // The one-line way for a screen to record what the signed-in person just did.
+  const logAction = useCallback(async (action: string, target: string, reason?: string) => {
+    const actor = userRef.current;
+    const entry: AuditEntry = {
+      id: `au-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
+      actorId: actor?.id || 'anonymous',
+      action,
+      target,
+      reason,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [entry, ...((stateRef.current.audit as AuditEntry[]) ?? [])];
+    await commit('audit', next, [entry]);
+  }, [commit]);
+
+  // ---------------------------------------------------------------- listings
   const updateListing = useCallback(async (id: string, patch: Partial<Listing>) => {
-    const next = listings.map((l) => (l.id === id ? { ...l, ...patch } : l));
-    await persist(KEYS.listings, next, setListings);
-  }, [listings]);
+    const all = (stateRef.current.listings as Listing[]) ?? [];
+    const next = all.map((l) => (l.id === id ? { ...l, ...patch } : l));
+    const changed = next.find((l) => l.id === id);
+    await commit('listings', next, changed ? [changed] : []);
+  }, [commit]);
 
   const addListing = useCallback(async (l: Listing) => {
-    const next = [l, ...listings];
-    await persist(KEYS.listings, next, setListings);
-  }, [listings]);
+    const next = [l, ...((stateRef.current.listings as Listing[]) ?? [])];
+    await commit('listings', next, [l]);
+  }, [commit]);
 
   const deleteListing = useCallback(async (id: string) => {
-    const next = listings.filter((l) => l.id !== id);
-    await persist(KEYS.listings, next, setListings);
-  }, [listings]);
+    const all = (stateRef.current.listings as Listing[]) ?? [];
+    await commit('listings', all.filter((l) => l.id !== id), [], [id]);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- bookings
   const addBooking = useCallback(async (b: Booking) => {
-    const next = [b, ...bookings];
-    await persist(KEYS.bookings, next, setBookings);
-  }, [bookings]);
+    const next = [b, ...((stateRef.current.bookings as Booking[]) ?? [])];
+    await commit('bookings', next, [b]);
+  }, [commit]);
 
   const updateBooking = useCallback(async (id: string, patch: Partial<Booking>) => {
-    const next = bookings.map((b) => (b.id === id ? { ...b, ...patch } : b));
-    await persist(KEYS.bookings, next, setBookings);
-  }, [bookings]);
+    const all = (stateRef.current.bookings as Booking[]) ?? [];
+    const next = all.map((b) => (b.id === id ? { ...b, ...patch } : b));
+    const changed = next.find((b) => b.id === id);
+    await commit('bookings', next, changed ? [changed] : []);
+  }, [commit]);
+
+  // ---------------------------------------------------------------- reviews
+  const recomputeRating = useCallback(async (listingId: string) => {
+    const all = (stateRef.current.reviews as Review[]) ?? [];
+    const listingsAll = (stateRef.current.listings as Listing[]) ?? [];
+    const visible = all.filter((x) => x.listingId === listingId && !x.hidden);
+    const avg = visible.length ? visible.reduce((s, x) => s + x.rating, 0) / visible.length : 0;
+    const nextListings = listingsAll.map((l) => (l.id === listingId
+      ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: visible.length }
+      : l));
+    const changed = nextListings.find((l) => l.id === listingId);
+    await commit('listings', nextListings, changed ? [changed] : []);
+  }, [commit]);
 
   const addReview = useCallback(async (r: Review) => {
-    const next = [r, ...reviews];
-    await persist(KEYS.reviews, next, setReviews);
-    // Recompute listing rating
-    const forListing = next.filter((x) => x.listingId === r.listingId);
-    const avg = forListing.reduce((s, x) => s + x.rating, 0) / forListing.length;
-    const nextListings = listings.map((l) => (l.id === r.listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: forListing.length } : l));
-    await persist(KEYS.listings, nextListings, setListings);
-  }, [reviews, listings]);
+    const next = [r, ...((stateRef.current.reviews as Review[]) ?? [])];
+    await commit('reviews', next, [r]);
+    await recomputeRating(r.listingId);
+  }, [commit, recomputeRating]);
 
   const updateReview = useCallback(async (id: string, patch: Partial<Review>) => {
-    const next = reviews.map((r) => (r.id === id ? { ...r, ...patch } : r));
-    await persist(KEYS.reviews, next, setReviews);
-    const listingId = next.find((r) => r.id === id)?.listingId;
-    if (listingId) {
-      const visible = next.filter((x) => x.listingId === listingId && !x.hidden);
-      const avg = visible.length ? visible.reduce((s, x) => s + x.rating, 0) / visible.length : 0;
-      const nextListings = listings.map((l) => (l.id === listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: visible.length } : l));
-      await persist(KEYS.listings, nextListings, setListings);
-    }
-  }, [reviews, listings]);
+    const all = (stateRef.current.reviews as Review[]) ?? [];
+    const next = all.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    const changed = next.find((r) => r.id === id);
+    await commit('reviews', next, changed ? [changed] : []);
+    const listingId = changed?.listingId;
+    if (listingId) await recomputeRating(listingId);
+  }, [commit, recomputeRating]);
 
   const deleteReview = useCallback(async (id: string) => {
-    const target = reviews.find((r) => r.id === id);
-    const next = reviews.filter((r) => r.id !== id);
-    await persist(KEYS.reviews, next, setReviews);
-    if (target) {
-      const visible = next.filter((x) => x.listingId === target.listingId && !x.hidden);
-      const avg = visible.length ? visible.reduce((s, x) => s + x.rating, 0) / visible.length : 0;
-      const nextListings = listings.map((l) => (l.id === target.listingId ? { ...l, rating: Math.round(avg * 10) / 10, reviewCount: visible.length } : l));
-      await persist(KEYS.listings, nextListings, setListings);
-    }
-  }, [reviews, listings]);
+    const all = (stateRef.current.reviews as Review[]) ?? [];
+    const target = all.find((r) => r.id === id);
+    await commit('reviews', all.filter((r) => r.id !== id), [], [id]);
+    if (target) await recomputeRating(target.listingId);
+  }, [commit, recomputeRating]);
 
+  // ---------------------------------------------------------------- events
   const addEvent = useCallback(async (e: EventItem) => {
-    const next = [e, ...events];
-    await persist(KEYS.events, next, setEvents);
-  }, [events]);
+    const next = [e, ...((stateRef.current.events as EventItem[]) ?? [])];
+    await commit('events', next, [e]);
+  }, [commit]);
 
   const updateEvent = useCallback(async (id: string, patch: Partial<EventItem>) => {
-    const next = events.map((e) => (e.id === id ? { ...e, ...patch } : e));
-    await persist(KEYS.events, next, setEvents);
-  }, [events]);
+    const all = (stateRef.current.events as EventItem[]) ?? [];
+    const next = all.map((e) => (e.id === id ? { ...e, ...patch } : e));
+    const changed = next.find((e) => e.id === id);
+    await commit('events', next, changed ? [changed] : []);
+  }, [commit]);
 
   const deleteEvent = useCallback(async (id: string) => {
-    const next = events.filter((e) => e.id !== id);
-    await persist(KEYS.events, next, setEvents);
-  }, [events]);
+    const all = (stateRef.current.events as EventItem[]) ?? [];
+    await commit('events', all.filter((e) => e.id !== id), [], [id]);
+  }, [commit]);
 
   const addAnnouncement = useCallback(async (a: Announcement) => {
-    const next = [a, ...announcements];
-    await persist(KEYS.announcements, next, setAnnouncements);
-  }, [announcements]);
+    const next = [a, ...((stateRef.current.announcements as Announcement[]) ?? [])];
+    await commit('announcements', next, [a]);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- chat
   const addMessage = useCallback(async (m: Message) => {
-    const next = [...messages, m];
-    await persist(KEYS.messages, next, setMessages);
-    const nextThreads = threads.map((t) =>
-      t.id === m.threadId ? { ...t, lastMessage: m.text, updatedAt: m.createdAt } : t,
-    );
-    await persist(KEYS.threads, nextThreads, setThreads);
-  }, [messages, threads]);
+    const msgs = [...((stateRef.current.messages as Message[]) ?? []), m];
+    const all = (stateRef.current.threads as Thread[]) ?? [];
+    const nextThreads = all.map((t) => (t.id === m.threadId ? { ...t, lastMessage: m.text, updatedAt: m.createdAt } : t));
+    const changedThread = nextThreads.find((t) => t.id === m.threadId);
+    await commit('messages', msgs, [m]);
+    await commit('threads', nextThreads, changedThread ? [changedThread] : []);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- notifications
   const markNotificationRead = useCallback(async (id: string) => {
-    const next = notifications.map((n) => (n.id === id ? { ...n, read: true } : n));
-    await persist(KEYS.notifications, next, setNotifications);
-  }, [notifications]);
+    const all = (stateRef.current.notifications as Notification[]) ?? [];
+    const next = all.map((n) => (n.id === id ? { ...n, read: true } : n));
+    const changed = next.find((n) => n.id === id);
+    await commit('notifications', next, changed ? [changed] : []);
+  }, [commit]);
 
   const addNotification = useCallback(async (n: Notification) => {
-    const next = [n, ...notifications];
-    await persist(KEYS.notifications, next, setNotifications);
-  }, [notifications]);
+    const next = [n, ...((stateRef.current.notifications as Notification[]) ?? [])];
+    await commit('notifications', next, [n]);
+  }, [commit]);
 
-  const addAudit = useCallback(async (a: AuditEntry) => {
-    const next = [a, ...audit];
-    await persist(KEYS.audit, next, setAudit);
-  }, [audit]);
-
+  // ---------------------------------------------------------------- reports
   const addReport = useCallback(async (r: Report) => {
-    const next = [r, ...reports];
-    await persist(KEYS.reports, next, setReports);
-  }, [reports]);
+    const next = [r, ...((stateRef.current.reports as Report[]) ?? [])];
+    await commit('reports', next, [r]);
+  }, [commit]);
 
   const updateReport = useCallback(async (id: string, patch: Partial<Report>) => {
-    const next = reports.map((r) => (r.id === id ? { ...r, ...patch } : r));
-    await persist(KEYS.reports, next, setReports);
-  }, [reports]);
+    const all = (stateRef.current.reports as Report[]) ?? [];
+    const next = all.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    const changed = next.find((r) => r.id === id);
+    await commit('reports', next, changed ? [changed] : []);
+  }, [commit]);
 
   const updateVillage = useCallback(async (id: string, patch: Partial<Village>) => {
-    const next = villages.map((v) => (v.id === id ? { ...v, ...patch } : v));
-    await persist(KEYS.villages, next, setVillages);
-  }, [villages]);
+    const all = (stateRef.current.villages as Village[]) ?? [];
+    const next = all.map((v) => (v.id === id ? { ...v, ...patch } : v));
+    const changed = next.find((v) => v.id === id);
+    await commit('villages', next, changed ? [changed] : []);
+  }, [commit]);
 
+  // Wishlist is device-local by design (it is personal to whoever holds the phone).
   const toggleWishlist = useCallback(async (id: string) => {
-    const next = wishlist.includes(id) ? wishlist.filter((x) => x !== id) : [...wishlist, id];
-    await persist(KEYS.wishlist, next, setWishlist);
+    const all = wishlist;
+    const next = all.includes(id) ? all.filter((x) => x !== id) : [...all, id];
+    setWishlist(next);
+    await cacheSet(KEYS.wishlist, next);
   }, [wishlist]);
 
+  // ---------------------------------------------------------------- pickups / arrivals
   const addPickup = useCallback(async (p: PickupRequest) => {
-    const next = [p, ...pickups];
-    await persist(KEYS.pickups, next, setPickups);
-  }, [pickups]);
+    const next = [p, ...((stateRef.current.pickups as PickupRequest[]) ?? [])];
+    await commit('pickups', next, [p]);
+  }, [commit]);
 
   const updatePickup = useCallback(async (id: string, patch: Partial<PickupRequest>) => {
-    const next = pickups.map((p) => (p.id === id ? { ...p, ...patch } : p));
-    await persist(KEYS.pickups, next, setPickups);
-  }, [pickups]);
+    const all = (stateRef.current.pickups as PickupRequest[]) ?? [];
+    const next = all.map((p) => (p.id === id ? { ...p, ...patch } : p));
+    const changed = next.find((p) => p.id === id);
+    await commit('pickups', next, changed ? [changed] : []);
+  }, [commit]);
 
   const upsertArrival = useCallback(async (bookingId: string, patch: Partial<ArrivalInfo>) => {
-    const exists = arrivals.find((a) => a.bookingId === bookingId);
-    const next = exists
-      ? arrivals.map((a) => (a.bookingId === bookingId ? { ...a, ...patch } : a))
-      : [{ bookingId, ...patch }, ...arrivals];
-    await persist(KEYS.arrivals, next, setArrivals);
-  }, [arrivals]);
+    const all = (stateRef.current.arrivals as ArrivalInfo[]) ?? [];
+    const exists = all.find((a) => a.bookingId === bookingId);
+    const row: ArrivalInfo = exists ? { ...exists, ...patch } : { bookingId, ...patch };
+    const next = exists ? all.map((a) => (a.bookingId === bookingId ? row : a)) : [row, ...all];
+    await commit('arrivals', next, [row]);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- responsible / seasonal
   const addResponsible = useCallback(async (g: ResponsibleGuide) => {
-    const next = [g, ...responsible];
-    await persist(KEYS.responsible, next, setResponsible);
-  }, [responsible]);
+    const next = [g, ...((stateRef.current.responsible as ResponsibleGuide[]) ?? [])];
+    await commit('responsible', next, [g]);
+  }, [commit]);
 
   const updateResponsible = useCallback(async (id: string, patch: Partial<ResponsibleGuide>) => {
-    const next = responsible.map((g) => (g.id === id ? { ...g, ...patch } : g));
-    await persist(KEYS.responsible, next, setResponsible);
-  }, [responsible]);
+    const all = (stateRef.current.responsible as ResponsibleGuide[]) ?? [];
+    const next = all.map((g) => (g.id === id ? { ...g, ...patch } : g));
+    const changed = next.find((g) => g.id === id);
+    await commit('responsible', next, changed ? [changed] : []);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- faqs
   const addFAQ = useCallback(async (f: FAQItem) => {
-    const next = [...faqs, f];
-    await persist(KEYS.faqs, next, setFaqs);
-  }, [faqs]);
+    const next = [...((stateRef.current.faqs as FAQItem[]) ?? []), f];
+    await commit('faqs', next, [f]);
+  }, [commit]);
 
   const updateFAQ = useCallback(async (id: string, patch: Partial<FAQItem>) => {
-    const next = faqs.map((f) => (f.id === id ? { ...f, ...patch } : f));
-    await persist(KEYS.faqs, next, setFaqs);
-  }, [faqs]);
+    const all = (stateRef.current.faqs as FAQItem[]) ?? [];
+    const next = all.map((f) => (f.id === id ? { ...f, ...patch } : f));
+    const changed = next.find((f) => f.id === id);
+    await commit('faqs', next, changed ? [changed] : []);
+  }, [commit]);
 
   const deleteFAQ = useCallback(async (id: string) => {
-    const next = faqs.filter((f) => f.id !== id);
-    await persist(KEYS.faqs, next, setFaqs);
-  }, [faqs]);
+    const all = (stateRef.current.faqs as FAQItem[]) ?? [];
+    await commit('faqs', all.filter((f) => f.id !== id), [], [id]);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- tickets
   const addTicket = useCallback(async (t: SupportTicket) => {
-    const next = [t, ...tickets];
-    await persist(KEYS.tickets, next, setTickets);
-  }, [tickets]);
+    const next = [t, ...((stateRef.current.tickets as SupportTicket[]) ?? [])];
+    await commit('tickets', next, [t]);
+  }, [commit]);
 
   const updateTicket = useCallback(async (id: string, patch: Partial<SupportTicket>) => {
-    const next = tickets.map((t) => (t.id === id ? { ...t, ...patch } : t));
-    await persist(KEYS.tickets, next, setTickets);
-  }, [tickets]);
+    const all = (stateRef.current.tickets as SupportTicket[]) ?? [];
+    const next = all.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    const changed = next.find((t) => t.id === id);
+    await commit('tickets', next, changed ? [changed] : []);
+  }, [commit]);
 
+  // ---------------------------------------------------------------- platform
   const updatePlatform = useCallback(async (patch: Partial<PlatformConfig>) => {
-    const next = { ...platform, ...patch };
-    await persist(KEYS.platform, next, setPlatform);
-  }, [platform]);
+    const next = { ...(stateRef.current.platform as PlatformConfig), ...patch };
+    setCollection('platform', next);
+    await cacheSet(KEYS.platform, next);
+    await writeItem('platform', next);
+  }, [setCollection]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all(SYNC_KEYS.map((k) => loadOne(k)));
+    setLive(isTableBackendReady());
+  }, [loadOne]);
 
   const resetDemoData = useCallback(async () => {
-    await storage.remove(KEYS.users);
-    await storage.remove(KEYS.listings);
-    await storage.remove(KEYS.bookings);
-    await storage.remove(KEYS.reviews);
-    await storage.remove(KEYS.events);
-    await storage.remove(KEYS.announcements);
-    await storage.remove(KEYS.threads);
-    await storage.remove(KEYS.messages);
-    await storage.remove(KEYS.notifications);
-    await storage.remove(KEYS.audit);
-    await storage.remove(KEYS.reports);
-    await storage.remove(KEYS.villages);
-    await storage.remove(KEYS.wishlist);
-    await storage.remove(KEYS.trips);
-    await storage.remove(KEYS.transport);
-    await storage.remove(KEYS.pickups);
-    await storage.remove(KEYS.arrivals);
-    await storage.remove(KEYS.responsible);
-    await storage.remove(KEYS.seasonal);
-    await storage.remove(KEYS.filters);
-    await storage.remove(KEYS.faqs);
-    await storage.remove(KEYS.tickets);
-    await storage.remove(KEYS.platform);
-  }, []);
+    for (const storageKey of SYNC_KEYS.map((k) => STORAGE_KEYS[k])) {
+      try { await AsyncStorage.removeItem(storageKey); } catch {}
+    }
+    try { await AsyncStorage.removeItem(KEYS.wishlist); await AsyncStorage.removeItem('rs_pending_ops'); } catch {}
+    stateRef.current = {};
+    await Promise.all(SYNC_KEYS.map((k) => loadOne(k)));
+  }, [loadOne]);
+
+  // Keep the ref mirrors in sync with rendered state (remote pushes included).
+  const liveState: Record<string, unknown> = {
+    listings, bookings, reviews, events, announcements, threads, messages, notifications,
+    audit, reports, villages, transport, pickups, arrivals, responsible, seasonal, faqs, tickets, platform,
+  };
+  Object.entries(liveState).forEach(([k, v]) => { stateRef.current[k] = v; });
+  const setterMap: Record<string, (v: never) => void> = {
+    listings: setListings as never, bookings: setBookings as never, reviews: setReviews as never,
+    events: setEvents as never, announcements: setAnnouncements as never, threads: setThreads as never,
+    messages: setMessages as never, notifications: setNotifications as never, audit: setAudit as never,
+    reports: setReports as never, villages: setVillages as never, transport: setTransport as never,
+    pickups: setPickups as never, arrivals: setArrivals as never, responsible: setResponsible as never,
+    seasonal: setSeasonal as never, faqs: setFaqs as never, tickets: setTickets as never,
+    platform: setPlatform as never,
+  };
+  Object.entries(setterMap).forEach(([k, fn]) => { settersRef.current[k] = fn; });
 
   return (
     <DataContext.Provider
       value={{
         listings, bookings, reviews, events, announcements, threads, messages, notifications,
-        audit, reports, villages, wishlist, transport, pickups, arrivals, responsible, seasonal, ready,
+        audit, reports, villages, wishlist, transport, pickups, arrivals, responsible, seasonal, ready, live,
         faqs, tickets, platform,
         updateListing, addListing, deleteListing, addBooking, updateBooking, addReview, updateReview, deleteReview,
         addEvent, updateEvent, deleteEvent, addAnnouncement, addMessage, markNotificationRead, addNotification,
-        addAudit, addReport, updateReport, updateVillage, toggleWishlist,
+        addAudit, logAction, addReport, updateReport, updateVillage, toggleWishlist,
         addPickup, updatePickup, upsertArrival, addResponsible, updateResponsible,
-        addFAQ, updateFAQ, deleteFAQ, addTicket, updateTicket, updatePlatform, resetDemoData,
+        addFAQ, updateFAQ, deleteFAQ, addTicket, updateTicket, updatePlatform, refreshAll, resetDemoData,
       }}
     >
       {children}

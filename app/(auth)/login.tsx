@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { useAlert } from '@/template';
 import { colors, radius, spacing, typography } from '@/constants/theme';
+import { email as validEmail, required } from '@/services/validation';
 
 const DEMO = [
   { label: 'Traveler', email: 'SampleTraveler@gmail.com', pw: '123root' },
@@ -26,20 +27,29 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState('');
+  const [errs, setErrs] = useState<{ email?: string; password?: string; form?: string }>({});
+
+  const onField = (key: 'email' | 'password', setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    if (errs[key]) setErrs((prev) => ({ ...prev, [key]: '', form: '' }));
+  };
 
   const onLogin = async () => {
-    setErr('');
-    if (!email || !password) { setErr('Please enter email and password'); return; }
+    const next: { email?: string; password?: string } = {
+      email: required(email, t('email')) || validEmail(email),
+      password: required(password, t('password')),
+    };
+    setErrs(next);
+    if (next.email || next.password) return;
     setLoading(true);
-    const res = await signIn(email, password);
+    const res = await signIn(email.trim(), password);
     setLoading(false);
-    if (!res.ok) { setErr(res.error || 'Sign in failed'); return; }
+    if (!res.ok) { setErrs({ form: res.error || 'Sign in failed' }); return; }
     router.replace('/');
   };
 
   const quickFill = (e: string, p: string) => {
-    setEmail(e); setPassword(p); setErr('');
+    setEmail(e); setPassword(p); setErrs({});
   };
 
   return (
@@ -60,9 +70,9 @@ export default function Login() {
           </View>
           <View style={styles.card}>
             <Text style={styles.title}>{t('signIn')}</Text>
-            <Input label={t('email')} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
-            <Input label={t('password')} value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
-            {err ? <Text style={styles.err}>{err}</Text> : null}
+            <Input label={t('email')} value={email} onChangeText={onField('email', setEmail)} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" error={errs.email} />
+            <Input label={t('password')} value={password} onChangeText={onField('password', setPassword)} secureTextEntry placeholder="••••••••" error={errs.password} />
+            {errs.form ? <Text style={styles.err}>{errs.form}</Text> : null}
             <Button title={t('signIn')} onPress={onLogin} loading={loading} fullWidth />
             <View style={styles.row}>
               <Text style={styles.muted}>{t('noAccount')}</Text>

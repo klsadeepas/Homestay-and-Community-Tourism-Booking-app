@@ -12,18 +12,21 @@ import { Stepper } from '@/components/ui/Stepper';
 import { StarRating } from '@/components/ui/StarRating';
 import { Avatar } from '@/components/ui/Avatar';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { DateField, todayIso } from '@/components/ui/DateField';
+import { PhotoField } from '@/components/ui/PhotoField';
 import { useData } from '@/hooks/useData';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { useAlert } from '@/template';
 import { formatPrice } from '@/services/currency';
+import { hasErrors, numberField, required, textLength, time as timeRule, type Errors } from '@/services/validation';
 import { Booking, ScheduleSlot, TOUR_CATEGORIES, TourCategory, Listing } from '@/constants/sampleData';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 const EXPERIENCE_CATEGORIES = ['meal', 'cooking', 'workshop', 'farm', 'craft'] as const;
 
 const dateStr = (d: Date) => d.toISOString().slice(0, 10);
-const todayStr = () => dateStr(new Date());
+const todayStr = () => todayIso();
 const addDays = (base: string, n: number) => dateStr(new Date(new Date(base).getTime() + n * 86400000));
 const nightsBetween = (a: string, b: string) => Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
 const fmtDate = (d: string) => new Date(d).toLocaleDateString('en', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -33,7 +36,7 @@ export default function ListingDetail() {
   const { id, edit } = useLocalSearchParams<{ id: string; edit?: string }>();
   const {
     listings, villages, bookings, reviews, wishlist, toggleWishlist,
-    addBooking, addNotification, updateListing, deleteListing, updateReview, addReport,
+    addBooking, addNotification, updateListing, deleteListing, updateReview, addReport, logAction,
   } = useData();
   const { user, users } = useAuth();
   const { t, currency } = useSettings();
@@ -53,15 +56,20 @@ export default function ListingDetail() {
   const [rooms, setRooms] = useState(1);
   const [note, setNote] = useState('');
   const [slotId, setSlotId] = useState<string | null>(null);
+  const [bookErrs, setBookErrs] = useState<Errors>({});
 
   // Review interaction state
   const [replyFor, setReplyFor] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [replyErr, setReplyErr] = useState('');
   const [reportFor, setReportFor] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState('');
+  const [reportErr, setReportErr] = useState('');
 
   // Edit mode state
   const [editing, setEditing] = useState(edit === '1');
+  const [errs, setErrs] = useState<Errors>({});
+  const [slotErrs, setSlotErrs] = useState<Errors>({});
   const [eTitle, setETitle] = useState(listing?.title || '');
   const [eDesc, setEDesc] = useState(listing?.description || '');
   const [ePhoto, setEPhoto] = useState(listing?.photo || '');
@@ -75,7 +83,8 @@ export default function ListingDetail() {
   const [eIncluded, setEIncluded] = useState((listing?.included || []).join(', '));
   const [eExcluded, setEExcluded] = useState((listing?.excluded || []).join(', '));
   const [eRules, setERules] = useState((listing?.rules || []).join(', '));
-  const [eBlocked, setEBlocked] = useState((listing?.blockedDates || []).join(', '));
+  const [eBlocked, setEBlocked] = useState<string[]>([...(listing?.blockedDates || [])].sort());
+  const [newBlocked, setNewBlocked] = useState('');
   const [eTourCat, setETourCat] = useState<TourCategory | ''>(listing?.tourCategory || '');
   const [eExpCat, setEExpCat] = useState(listing?.experienceCategory || '');
   const [eSlots, setESlots] = useState<ScheduleSlot[]>(listing?.scheduleSlots || []);
@@ -118,9 +127,16 @@ export default function ListingDetail() {
   const submitBooking = async () => {
     if (!user) { showAlert('Sign in', 'Please sign in to book.'); return; }
     if (user.role !== 'traveler') { showAlert('Traveler account required', 'Only traveler accounts can make bookings.'); return; }
-    if (!dateFrom) { showAlert('Pick a date', 'A start date is required.'); return; }
+    const errs: Errors = {};
+    errs.dateFrom = required(dateFrom, isHomestay ? 'Check-in date' : 'Date');
     if (isHomestay) {
-      if (nights < 1) { showAlert('Check dates', 'Check-out must be after check-in.'); return; }
+      errs.dateTo = required(dateTo, 'Check-out date') || (dateTo < dateFrom ? 'Check-out must be after check-in.' : '');
+      if (nights < 1 && !errs.dateTo) errs.dateTo = 'Stay must be at least one night.';
+    }
+    if (guests < 1) errs.guests = 'At least 1 guest is required.';
+    setBookErrs(errs);
+    if (hasErrors(errs)) return;
+    if (isHomestay) {
       const blocked = listing.blockedDates || [];
       for (let i = 0; i < nights; i++) {
         const d = addDays(dateFrom, i);
@@ -153,6 +169,7 @@ export default function ListingDetail() {
       instantConfirmed: instant || undefined,
     };
     await addBooking(booking);
+    await logAction('booking_created', `${listing.title} · ${fmtDate(dateFrom)}${isHomestay && dateTo !== dateFrom ? ` → ${fmtDate(dateTo)}` : ''}, ${guests} guest(s)`, note.trim() || undefined);
     await addNotification({
       id: `n-${Date.now()}`,
       userId: listing.ownerId,
@@ -167,18 +184,26 @@ export default function ListingDetail() {
   };
 
   const saveReply = async (reviewId: string) => {
-    if (!replyText.trim()) { showAlert('Empty reply', 'Please write a response.'); return; }
+    const msg = required(replyText, 'Response') || textLength(replyText, 'Response', 3, 600);
+    setReplyErr(msg);
+    if (msg) return;
     await updateReview(reviewId, { hostReply: { text: replyText.trim(), authorId: user!.id, createdAt: new Date().toISOString() } });
+    await logAction('host_reply_posted', listing?.title || reviewId, replyText.trim());
     setReplyFor(null);
     setReplyText('');
+    setReplyErr('');
     showAlert('Reply posted', 'Your response is now visible on the review.');
   };
 
   const submitReport = async (reviewId: string) => {
-    if (!reportReason.trim()) { showAlert('Add a reason', 'Please tell us what is wrong with this review.'); return; }
+    const msg = required(reportReason, 'Reason') || textLength(reportReason, 'Reason', 5, 400);
+    setReportErr(msg);
+    if (msg) return;
     await addReport({ id: `rep-${Date.now()}`, reporterId: user!.id, targetType: 'review', targetId: reviewId, reason: reportReason.trim(), status: 'open', createdAt: new Date().toISOString() });
+    await logAction('review_reported', reviewId, reportReason.trim());
     setReportFor(null);
     setReportReason('');
+    setReportErr('');
     showAlert('Reported', 'Our team will review this. Thank you.');
   };
 
@@ -186,15 +211,29 @@ export default function ListingDetail() {
   const parseList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 
   const saveEdit = async () => {
+    const next: Errors = {};
+    next.title = required(eTitle, 'Title') || textLength(eTitle, 'Title', 4, 120);
+    next.description = required(eDesc, 'Description') || textLength(eDesc, 'Description', 20, 1500);
+    next.photo = required(ePhoto, 'Photo');
+    next.price = numberField(ePrice, { label: 'Price', min: 1, max: 5_000_000 });
+    next.capacity = numberField(eCapacity, { label: 'Capacity', min: 1, max: 500, integer: true });
+    if (isHomestay) {
+      next.rooms = numberField(eRooms, { label: 'Rooms', min: 1, max: 100, integer: true, required: false });
+    } else {
+      next.duration = textLength(eDuration, 'Duration', 2, 60);
+      next.meetingPoint = required(eMeeting, 'Meeting point') || textLength(eMeeting, 'Meeting point', 3, 120);
+      if (listing.type === 'tour') next.tourCategory = required(eTourCat, 'Tour category');
+      if (listing.type === 'experience') next.experienceCategory = required(eExpCat, 'Experience category');
+    }
+    setErrs(next);
+    if (hasErrors(next)) return;
+
     const price = Number(ePrice);
     const capacity = Number(eCapacity);
-    if (!eTitle.trim() || !eDesc.trim()) { showAlert('Missing details', 'Title and description are required.'); return; }
-    if (!price || price <= 0) { showAlert('Invalid price', 'Enter a price greater than zero.'); return; }
-    if (!capacity || capacity <= 0) { showAlert('Invalid capacity', 'Enter a capacity greater than zero.'); return; }
     const patch: Partial<Listing> = {
       title: eTitle.trim(),
       description: eDesc.trim(),
-      photo: ePhoto.trim() || listing.photo,
+      photo: ePhoto.trim(),
       pricePerUnitLKR: price,
       capacity,
       duration: eDuration.trim() || undefined,
@@ -204,7 +243,7 @@ export default function ListingDetail() {
       included: parseList(eIncluded),
       excluded: parseList(eExcluded),
       rules: parseList(eRules),
-      blockedDates: parseList(eBlocked),
+      blockedDates: eBlocked,
       scheduleSlots: eSlots,
     };
     if (listing.type === 'tour') patch.tourCategory = (eTourCat || 'general') as TourCategory;
@@ -215,26 +254,40 @@ export default function ListingDetail() {
       delete patch.meetingPoint;
     }
     await updateListing(listing.id, patch);
+    await logAction('listing_edited', listing.title);
     showAlert('Saved', 'Listing details updated.');
   };
 
   const addSlot = () => {
-    const cap = Number(slotCap);
-    if (!slotDate || !slotTime || !cap || cap <= 0) { showAlert('Invalid slot', 'Date, time and capacity are required.'); return; }
-    setESlots([...eSlots, { id: `ss-${Date.now()}`, date: slotDate, time: slotTime, capacity: cap }]);
+    const next: Errors = {};
+    next.slotDate = required(slotDate, 'Slot date') || (slotDate < todayStr() ? 'Departure dates cannot be in the past.' : '');
+    next.slotTime = timeRule(slotTime, 'Time');
+    next.slotCap = numberField(slotCap, { label: 'Seats', min: 1, max: 500, integer: true });
+    const dupe = eSlots.some((s) => s.date === slotDate && s.time === slotTime.trim());
+    if (!hasErrors(next) && dupe) next.slotTime = 'That date and time is already scheduled.';
+    setSlotErrs(next);
+    if (hasErrors(next)) return;
+    setESlots([...eSlots, { id: `ss-${Date.now()}`, date: slotDate, time: slotTime.trim(), capacity: Number(slotCap) }]);
+    setSlotErrs({});
+  };
+
+  const addBlockedDate = (d: string) => {
+    if (!d) return;
+    setEBlocked((prev) => (prev.includes(d) ? prev : [...prev, d].sort()));
+    setNewBlocked('');
   };
 
   const submitForReview = () => {
     showAlert('Submit for review?', 'Coordinators will review this listing before it goes live.', [
       { text: t('cancel'), style: 'cancel' },
-      { text: 'Submit', onPress: async () => { await updateListing(listing.id, { status: 'submitted', reviewReason: undefined }); setEditing(false); } },
+      { text: 'Submit', onPress: async () => { await updateListing(listing.id, { status: 'submitted', reviewReason: undefined }); await logAction('listing_submitted', listing.title); setEditing(false); } },
     ]);
   };
 
   const removeListing = () => {
     showAlert('Delete listing?', 'This cannot be undone.', [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('delete'), style: 'destructive', onPress: async () => { await deleteListing(listing.id); router.back(); } },
+      { text: t('delete'), style: 'destructive', onPress: async () => { await deleteListing(listing.id); await logAction('listing_deleted', listing.title); router.back(); } },
     ]);
   };
 
@@ -259,20 +312,20 @@ export default function ListingDetail() {
     return (
       <Screen back title={`Edit — ${listing.title}`} right={headerRight}>
         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxxl }} keyboardShouldPersistTaps="handled">
-          <Input label="Title" value={eTitle} onChangeText={setETitle} />
-          <Input label="Description" value={eDesc} onChangeText={setEDesc} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} />
-          <Input label="Photo URL" value={ePhoto} onChangeText={setEPhoto} autoCapitalize="none" />
+          <Input label="Title" value={eTitle} onChangeText={(v) => { setETitle(v); setErrs((p) => ({ ...p, title: '' })); }} error={errs.title} />
+          <Input label="Description" value={eDesc} onChangeText={setEDesc} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={errs.description} helper="At least 20 characters." />
+          <PhotoField label="Photo" value={ePhoto} onChange={(v) => { setEPhoto(v); setErrs((p) => ({ ...p, photo: '' })); }} folder="listings" error={errs.photo} helper="Picked from this phone and uploaded so every device sees the same image." />
           <View style={styles.twoCol}>
-            <View style={{ flex: 1 }}><Input label="Price (LKR)" value={ePrice} onChangeText={setEPrice} keyboardType="numeric" /></View>
-            <View style={{ flex: 1 }}><Input label="Capacity" value={eCapacity} onChangeText={setECapacity} keyboardType="numeric" /></View>
+            <View style={{ flex: 1 }}><Input label="Price (LKR)" value={ePrice} onChangeText={setEPrice} keyboardType="numeric" error={errs.price} /></View>
+            <View style={{ flex: 1 }}><Input label="Capacity" value={eCapacity} onChangeText={setECapacity} keyboardType="numeric" error={errs.capacity} /></View>
           </View>
           {isHomestay ? (
-            <Input label="Rooms" value={eRooms} onChangeText={setERooms} keyboardType="numeric" />
+            <Input label="Rooms" value={eRooms} onChangeText={setERooms} keyboardType="numeric" error={errs.rooms} />
           ) : (
             <>
               <View style={styles.twoCol}>
-                <View style={{ flex: 1 }}><Input label="Duration" value={eDuration} onChangeText={setEDuration} placeholder="e.g. 3 hours" /></View>
-                <View style={{ flex: 1 }}><Input label="Meeting point" value={eMeeting} onChangeText={setEMeeting} /></View>
+                <View style={{ flex: 1 }}><Input label="Duration" value={eDuration} onChangeText={setEDuration} placeholder="e.g. 3 hours" error={errs.duration} /></View>
+                <View style={{ flex: 1 }}><Input label="Meeting point" value={eMeeting} onChangeText={setEMeeting} error={errs.meetingPoint} /></View>
               </View>
               {listing.type === 'tour' ? (
                 <View style={styles.fieldGroup}>
@@ -282,6 +335,7 @@ export default function ListingDetail() {
                       <Chip key={c} label={c} selected={eTourCat === c} onPress={() => setETourCat(c)} />
                     ))}
                   </View>
+                  {errs.tourCategory ? <Text style={styles.fieldError}>{errs.tourCategory}</Text> : null}
                 </View>
               ) : (
                 <View style={styles.fieldGroup}>
@@ -291,6 +345,7 @@ export default function ListingDetail() {
                       <Chip key={c} label={c} selected={eExpCat === c} onPress={() => setEExpCat(c)} />
                     ))}
                   </View>
+                  {errs.experienceCategory ? <Text style={styles.fieldError}>{errs.experienceCategory}</Text> : null}
                 </View>
               )}
               <View style={styles.fieldGroup}>
@@ -305,11 +360,15 @@ export default function ListingDetail() {
                   </View>
                 ))}
                 <View style={styles.twoCol}>
-                  <View style={{ flex: 1 }}><Input label="Date" value={slotDate} onChangeText={setSlotDate} placeholder="YYYY-MM-DD" autoCapitalize="none" /></View>
-                  <View style={{ flex: 1 }}><Input label="Time" value={slotTime} onChangeText={setSlotTime} placeholder="HH:MM" autoCapitalize="none" /></View>
+                  <View style={{ flex: 1 }}>
+                    <DateField label="Date" value={slotDate} onChange={setSlotDate} minDate={todayStr()} error={slotErrs.slotDate} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Input label="Time (24h)" value={slotTime} onChangeText={setSlotTime} placeholder="HH:MM" keyboardType="numbers-and-punctuation" error={slotErrs.slotTime} />
+                  </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm }}>
-                  <View style={{ flex: 1 }}><Input label="Seats" value={slotCap} onChangeText={setSlotCap} keyboardType="numeric" /></View>
+                  <View style={{ flex: 1 }}><Input label="Seats" value={slotCap} onChangeText={setSlotCap} keyboardType="numeric" error={slotErrs.slotCap} /></View>
                   <Button title="Add slot" variant="secondary" onPress={addSlot} />
                 </View>
               </View>
@@ -319,7 +378,29 @@ export default function ListingDetail() {
           <Input label="Included (comma separated)" value={eIncluded} onChangeText={setEIncluded} />
           <Input label="Excluded (comma separated)" value={eExcluded} onChangeText={setEExcluded} />
           {isHomestay ? <Input label="House rules (comma separated)" value={eRules} onChangeText={setERules} /> : null}
-          <Input label="Blocked dates (comma separated YYYY-MM-DD)" value={eBlocked} onChangeText={setEBlocked} autoCapitalize="none" />
+          <View style={styles.fieldGroup}>
+            <Text style={styles.fieldLabel}>Blocked dates</Text>
+            {eBlocked.length ? (
+              <View style={styles.chipRow}>
+                {eBlocked.map((d) => (
+                  <View key={d} style={styles.blockedChip}>
+                    <Text style={styles.blockedText}>{fmtDate(d)}</Text>
+                    <Pressable onPress={() => setEBlocked(eBlocked.filter((x) => x !== d))} hitSlop={6} accessibilityRole="button">
+                      <MaterialIcons name="close" size={14} color={colors.danger} />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.caption}>No blocked dates.</Text>
+            )}
+            <DateField
+              label="Add a blocked date"
+              value={newBlocked}
+              onChange={addBlockedDate}
+              helper="Travelers cannot book this day."
+            />
+          </View>
           <View style={styles.editActions}>
             <Button title="Save changes" onPress={saveEdit} />
             {listing.status === 'draft' || listing.status === 'needs_changes' ? <Button title={listing.status === 'needs_changes' ? 'Resubmit for review' : 'Submit for review'} variant="secondary" onPress={submitForReview} /> : null}
@@ -542,13 +623,13 @@ export default function ListingDetail() {
                     </View>
                     {replyFor === r.id ? (
                       <View style={styles.inlineForm}>
-                        <Input placeholder="Write a public response" value={replyText} onChangeText={setReplyText} multiline numberOfLines={2} style={{ minHeight: 56, textAlignVertical: 'top' }} />
+                        <Input placeholder="Write a public response" value={replyText} onChangeText={setReplyText} multiline numberOfLines={2} style={{ minHeight: 56, textAlignVertical: 'top' }} error={replyErr} />
                         <Button title="Post response" onPress={() => saveReply(r.id)} />
                       </View>
                     ) : null}
                     {reportFor === r.id ? (
                       <View style={styles.inlineForm}>
-                        <Input placeholder="Reason for reporting" value={reportReason} onChangeText={setReportReason} multiline numberOfLines={2} style={{ minHeight: 56, textAlignVertical: 'top' }} />
+                        <Input placeholder="Reason for reporting" value={reportReason} onChangeText={setReportReason} multiline numberOfLines={2} style={{ minHeight: 56, textAlignVertical: 'top' }} error={reportErr} />
                         <Button title="Submit report" variant="danger" onPress={() => submitReport(r.id)} />
                       </View>
                     ) : null}
@@ -564,11 +645,18 @@ export default function ListingDetail() {
               <Text style={styles.sectionTitle}>{listing.instantBooking ? t('bookInstant') : t('bookRequest')}</Text>
               <View style={styles.twoCol}>
                 <View style={{ flex: 1 }}>
-                  <Input label={isHomestay ? 'Check-in' : 'Date'} value={dateFrom} onChangeText={(v) => { setDateFrom(v); setSlotId(null); }} placeholder="YYYY-MM-DD" autoCapitalize="none" />
+                  <DateField
+                    label={isHomestay ? 'Check-in' : 'Date'}
+                    value={dateFrom}
+                    onChange={(v) => { setDateFrom(v); setSlotId(null); setBookErrs((p) => ({ ...p, dateFrom: '', dateTo: '' })); }}
+                    minDate={todayStr()}
+                    maxDate={isHomestay ? dateTo : undefined}
+                    error={bookErrs.dateFrom}
+                  />
                 </View>
                 {isHomestay ? (
                   <View style={{ flex: 1 }}>
-                    <Input label="Check-out" value={dateTo} onChangeText={setDateTo} placeholder="YYYY-MM-DD" autoCapitalize="none" />
+                    <DateField label="Check-out" value={dateTo} onChange={setDateTo} minDate={dateFrom} error={bookErrs.dateTo} />
                   </View>
                 ) : null}
               </View>
@@ -627,6 +715,9 @@ const styles = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   fieldGroup: { marginTop: spacing.sm, gap: spacing.sm },
   fieldLabel: { ...typography.smallBold, color: colors.text },
+  fieldError: { ...typography.caption, color: colors.danger },
+  blockedChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border },
+  blockedText: { ...typography.caption, color: colors.text },
   bulletRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   bulletText: { ...typography.small, color: colors.text, flex: 1 },
   factRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 4 },

@@ -18,7 +18,7 @@ type Tab = 'requests' | 'upcoming' | 'past';
 export default function GuideBookings() {
   const router = useRouter();
   const { user, users } = useAuth();
-  const { listings, bookings, updateBooking, addNotification } = useData();
+  const { listings, bookings, updateBooking, addNotification, logAction } = useData();
   const { t, currency } = useSettings();
   const { showAlert } = useAlert();
   const [tab, setTab] = useState<Tab>('requests');
@@ -37,6 +37,7 @@ export default function GuideBookings() {
       { text: next === 'confirmed' ? t('accept') : t('decline'), onPress: async () => {
         const b = bookings.find((x) => x.id === id);
         await updateBooking(id, { status: next });
+        await logAction(`guide_booking_${next}`, `${listings.find((l) => l.id === b?.listingId)?.title || b?.listingId || ''} · ${id}`);
         if (b) await addNotification({ id: `n-${Date.now()}`, userId: b.travelerId, title: next === 'confirmed' ? 'Tour confirmed' : 'Tour declined', body: 'Your tour booking status changed.', read: false, createdAt: new Date().toISOString(), type: 'booking', link: `/booking/${b.id}` });
       }},
     ]);

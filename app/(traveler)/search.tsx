@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Chip';
 import { RangeField } from '@/components/ui/RangeField';
+import { DateRangeField } from '@/components/ui/DateField';
 import { Stepper } from '@/components/ui/Stepper';
 import { ListingCard } from '@/components/feature/ListingCard';
 import { VillageMapView } from '@/components/feature/VillageMapView';
@@ -14,6 +15,7 @@ import { useData } from '@/hooks/useData';
 import { useSettings } from '@/hooks/useSettings';
 import { storage, KEYS } from '@/services/storage';
 import { formatPrice } from '@/services/currency';
+import { hasErrors, numberField, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 type ViewMode = 'list' | 'map';
@@ -47,6 +49,7 @@ export default function Search() {
   const [filters, setFilters] = useState<FiltersState>(EMPTY);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<FiltersState>(EMPTY);
+  const [fErrs, setFErrs] = useState<Errors>({});
   const [view, setView] = useState<ViewMode>('list');
   const [selectedVillageId, setSelectedVillageId] = useState<string | undefined>(undefined);
 
@@ -118,9 +121,23 @@ export default function Search() {
     (filters.sort !== 'popularity' ? 1 : 0)
   );
 
-  const openSheet = () => { setDraft(filters); setOpen(true); };
-  const applyFilters = () => { setFilters(draft); setOpen(false); };
-  const resetFilters = () => { setDraft(EMPTY); setFilters(EMPTY); };
+  const openSheet = () => { setDraft(filters); setFErrs({}); setOpen(true); };
+  const applyFilters = () => {
+    const errs: Errors = {};
+    if (draft.dateFrom && draft.dateTo && draft.dateTo < draft.dateFrom) errs.dateTo = 'End date must be on or after the start date.';
+    const minP = draft.minPrice === '' ? 0 : Number(draft.minPrice);
+    const maxP = draft.maxPrice === '' ? 0 : Number(draft.maxPrice);
+    if (draft.minPrice !== '') errs.minPrice = numberField(draft.minPrice, { label: 'Minimum price', min: 0, max: 10_000_000 });
+    if (draft.maxPrice !== '') errs.maxPrice = numberField(draft.maxPrice, { label: 'Maximum price', min: 0, max: 10_000_000 });
+    if (!errs.minPrice && !errs.maxPrice && draft.minPrice !== '' && draft.maxPrice !== '' && minP > maxP) {
+      errs.minPrice = 'Minimum price must be lower than the maximum price.';
+    }
+    setFErrs(errs);
+    if (hasErrors(errs)) return;
+    setFilters(draft);
+    setOpen(false);
+  };
+  const resetFilters = () => { setDraft(EMPTY); setFilters(EMPTY); setFErrs({}); };
 
   const toggle = (arr: string[], v: string) => arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
@@ -246,11 +263,17 @@ export default function Search() {
         <Screen title={t('filters')} back onBack={() => setOpen(false)} right={<Pressable onPress={() => setDraft(EMPTY)}><Text style={styles.sheetReset}>{t('reset')}</Text></Pressable>}>
           <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 120 }}>
             <Text style={styles.sheetSection}>{t('dateRange')}</Text>
-            <RangeField label="From / To (YYYY-MM-DD)" min={draft.dateFrom} max={draft.dateTo} onMin={(v) => setDraft({ ...draft, dateFrom: v })} onMax={(v) => setDraft({ ...draft, dateTo: v })} />
+            <DateRangeField
+              label="Stay dates"
+              from={draft.dateFrom}
+              to={draft.dateTo}
+              onChange={(from, to) => setDraft({ ...draft, dateFrom: from, dateTo: to })}
+              errorTo={fErrs.dateTo}
+            />
             <Text style={styles.sheetHint}>Availability check runs at booking submission.</Text>
 
             <Text style={styles.sheetSection}>{t('priceRange')} (LKR)</Text>
-            <RangeField label="Price range" min={draft.minPrice} max={draft.maxPrice} onMin={(v) => setDraft({ ...draft, minPrice: v })} onMax={(v) => setDraft({ ...draft, maxPrice: v })} numeric suffix="LKR" />
+            <RangeField label="Price range" min={draft.minPrice} max={draft.maxPrice} onMin={(v) => setDraft({ ...draft, minPrice: v })} onMax={(v) => setDraft({ ...draft, maxPrice: v })} numeric suffix="LKR" errorMin={fErrs.minPrice} errorMax={fErrs.maxPrice} />
 
             <Text style={styles.sheetSection}>{t('guests')}</Text>
             <View style={styles.inset}>

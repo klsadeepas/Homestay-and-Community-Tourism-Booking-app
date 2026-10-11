@@ -20,7 +20,7 @@ type Method = 'card_demo' | 'local_wallet_demo' | 'cash_on_arrival';
 export default function Pay() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { bookings, listings, updateBooking, addNotification } = useData();
+  const { bookings, listings, updateBooking, addNotification, logAction } = useData();
   const { user } = useAuth();
   const { showAlert } = useAlert();
   const { t, currency } = useSettings();
@@ -40,6 +40,7 @@ export default function Pay() {
       if (outcome === 'success') {
         const ref = paymentReference();
         await updateBooking(booking.id, { paymentStatus: 'paid', paymentMethod: method, paymentRef: ref, paidAt: new Date().toISOString() });
+        await logAction('payment_completed', `${listing?.title || booking.listingId} · ${booking.id}`, `${method} · ref ${ref}`);
         await addNotification({ id: `n-${Date.now()}`, userId: listing!.ownerId, title: 'Payment received', body: `${listing?.title} paid in demo. Ref ${ref}.`, read: false, createdAt: new Date().toISOString(), type: 'payment', link: `/booking/${booking.id}` });
         await addNotification({ id: `n-${Date.now() + 1}`, userId: booking.travelerId, title: 'Payment successful', body: `Your demo payment for ${listing?.title} succeeded.`, read: false, createdAt: new Date().toISOString(), type: 'payment', link: `/booking/${booking.id}` });
         setSimulating(false);
@@ -48,6 +49,7 @@ export default function Pay() {
         ]);
       } else {
         await updateBooking(booking.id, { paymentStatus: 'failed' });
+        await logAction('payment_failed', `${listing?.title || booking.listingId} · ${booking.id}`, `method ${method}`);
         setSimulating(false);
         showAlert('Payment demo failed', 'The booking remains unpaid. Try again or choose a different method.');
       }

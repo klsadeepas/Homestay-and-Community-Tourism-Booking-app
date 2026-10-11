@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { Role } from '@/services/types';
+import { email as validEmail, hasErrors, password as validPassword, phone as validPhone, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 const ROLES: { value: Role; label: string; note: string }[] = [
@@ -25,16 +26,26 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('traveler');
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState('');
+  const [errs, setErrs] = useState<Errors>({});
+
+  const onField = (key: string, setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    if (errs[key]) setErrs((prev) => ({ ...prev, [key]: '' }));
+  };
 
   const onSubmit = async () => {
-    setErr('');
-    if (!name || !email || !password) { setErr('Please fill in required fields'); return; }
-    if (password.length < 6) { setErr('Password must be at least 6 characters'); return; }
+    const next: Errors = {
+      name: required(name, t('name')) || textLength(name, t('name'), 2, 60),
+      email: required(email, t('email')) || validEmail(email),
+      phone: validPhone(phone),
+      password: required(password, t('password')) || validPassword(password),
+    };
+    setErrs(next);
+    if (hasErrors(next)) return;
     setLoading(true);
-    const res = await signUp({ name, email, phone, password, role });
+    const res = await signUp({ name: name.trim(), email: email.trim(), phone: phone.trim(), password, role });
     setLoading(false);
-    if (!res.ok) { setErr(res.error || 'Registration failed'); return; }
+    if (!res.ok) { setErrs({ form: res.error || 'Registration failed' }); return; }
     router.replace('/');
   };
 
@@ -45,10 +56,10 @@ export default function Register() {
           <Text style={styles.title}>{t('createAccount')}</Text>
           <Text style={styles.sub}>Join the RootedStay community</Text>
           <View style={styles.card}>
-            <Input label={t('name')} value={name} onChangeText={setName} placeholder="Jane Perera" />
-            <Input label={t('email')} value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
-            <Input label={t('phone')} value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+94 77 ..." />
-            <Input label={t('password')} value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 6 characters" />
+            <Input label={t('name')} value={name} onChangeText={onField('name', setName)} placeholder="Jane Perera" error={errs.name} />
+            <Input label={t('email')} value={email} onChangeText={onField('email', setEmail)} autoCapitalize="none" keyboardType="email-address" error={errs.email} />
+            <Input label={t('phone')} value={phone} onChangeText={onField('phone', setPhone)} keyboardType="phone-pad" placeholder="+94 77 ..." helper="Optional" error={errs.phone} />
+            <Input label={t('password')} value={password} onChangeText={onField('password', setPassword)} secureTextEntry placeholder="At least 6 characters" error={errs.password} />
 
             <Text style={styles.label}>{t('role')}</Text>
             <View style={{ gap: spacing.sm }}>
@@ -71,7 +82,7 @@ export default function Register() {
               Coordinators and System Admin are provisioned by administrators and are not available in public registration.
             </Text>
 
-            {err ? <Text style={styles.err}>{err}</Text> : null}
+            {errs.form ? <Text style={styles.err}>{errs.form}</Text> : null}
             <Button title={t('createAccount')} onPress={onSubmit} loading={loading} fullWidth />
             <View style={styles.row}>
               <Text style={styles.muted}>{t('haveAccount')}</Text>

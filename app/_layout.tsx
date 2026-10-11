@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useEffect } from 'react';
+import React from 'react';
 import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -7,13 +7,8 @@ import { AlertProvider } from '@/template';
 import { SettingsProvider } from '@/contexts/SettingsContext';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { DataProvider } from '@/contexts/DataContext';
-import { startLiveSync } from '@/services/sync';
 
 export default function RootLayout() {
-  useEffect(() => {
-    startLiveSync();
-  }, []);
-
   return (
     <AlertProvider>
       <SafeAreaProvider>
@@ -27,7 +22,6 @@ export default function RootLayout() {
                 <Stack.Screen name="(traveler)" />
                 <Stack.Screen name="(owner)" />
                 <Stack.Screen name="(guide)" />
-                <Stack.Screen name="(coordinator)" />
                 <Stack.Screen name="(admin)" />
                 <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
                 <Stack.Screen name="settings" />

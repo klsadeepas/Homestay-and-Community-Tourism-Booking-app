@@ -19,8 +19,8 @@ const FILTERS: Filter[] = ['all', 'pending', 'confirmed', 'declined', 'completed
 
 export default function AdminBookings() {
   const router = useRouter();
-  const { users, user } = useAuth();
-  const { bookings, listings, updateBooking, addAudit, addNotification } = useData();
+  const { users } = useAuth();
+  const { bookings, listings, updateBooking, logAction, addNotification } = useData();
   const { currency } = useSettings();
   const { showAlert } = useAlert();
   const [filter, setFilter] = useState<Filter>('all');
@@ -36,7 +36,7 @@ export default function AdminBookings() {
       { text: 'Cancel', style: 'cancel' },
       { text: action, style: status === 'declined' || status === 'cancelled' ? 'destructive' : undefined, onPress: async () => {
         await updateBooking(b.id, { status });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: `booking_${status}`, target: b.id, createdAt: new Date().toISOString() });
+        await logAction(`booking_${status}`, b.id);
         await addNotification({
           id: `n-${Date.now()}`, userId: b.travelerId,
           title: `Booking ${status}`, body: `Your booking ${b.id} for ${listingOf(b.listingId)?.title || b.listingId} was ${status} by the platform team.`,

@@ -13,13 +13,14 @@ import { useSettings } from '@/hooks/useSettings';
 import { useAlert } from '@/template';
 import { SupportTicket } from '@/constants/sampleData';
 import { colors, radius, spacing, typography } from '@/constants/theme';
+import { hasErrors, required, textLength } from '@/services/validation';
 
 const CATEGORIES: SupportTicket['category'][] = ['booking', 'payment', 'host', 'guide', 'app', 'other'];
 const CAT_LABELS: Record<string, string> = { booking: 'Bookings', payment: 'Payments', host: 'Hosts', guide: 'Guides', app: 'App help', other: 'Other' };
 
 export default function Support() {
   const { user } = useAuth();
-  const { faqs, tickets, addTicket } = useData();
+  const { faqs, tickets, addTicket, logAction } = useData();
   const { t } = useSettings();
   const { showAlert } = useAlert();
   const [tab, setTab] = useState<'faq' | 'tickets'>('faq');
@@ -35,11 +36,12 @@ export default function Support() {
   const mine = tickets.filter((tk) => tk.userId === user?.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   const send = async () => {
-    const e: Record<string, string> = {};
-    if (!form.subject.trim()) e.subject = t('required');
-    if (!form.message.trim()) e.message = t('required');
+    const e: Record<string, string> = {
+      subject: required(form.subject, t('subject')) || textLength(form.subject, t('subject'), 5, 120),
+      message: required(form.message, t('message')) || textLength(form.message, t('message'), 15, 1500),
+    };
     setErrors(e);
-    if (Object.keys(e).length) return;
+    if (hasErrors(e)) return;
     await addTicket({
       id: `tk-${Date.now()}`,
       userId: user!.id,
@@ -51,6 +53,7 @@ export default function Support() {
       createdAt: new Date().toISOString().slice(0, 10),
       replies: [],
     });
+    await logAction('support_ticket_created', form.subject.trim(), form.category);
     setOpen(false);
     setForm({ subject: '', category: 'booking', message: '' });
     setTab('tickets');
@@ -130,14 +133,14 @@ export default function Support() {
         <Screen back onBack={() => setOpen(false)} title={t('newTicket')}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={{ padding: spacing.lg }} keyboardShouldPersistTaps="handled">
-              <Input label={`${t('subject')} *`} value={form.subject} onChangeText={(v) => setForm({ ...form, subject: v })} error={errors.subject} />
+              <Input label={`${t('subject')} *`} value={form.subject} onChangeText={(v) => { setForm({ ...form, subject: v }); if (errors.subject) setErrors({ ...errors, subject: '' }); }} error={errors.subject} />
               <Text style={styles.label}>{t('category')}</Text>
               <View style={styles.chipRow}>
                 {CATEGORIES.map((c) => (
                   <Chip key={c} label={CAT_LABELS[c]} selected={form.category === c} onPress={() => setForm({ ...form, category: c })} />
                 ))}
               </View>
-              <Input label={`${t('message')} *`} value={form.message} onChangeText={(v) => setForm({ ...form, message: v })} multiline numberOfLines={5} style={{ minHeight: 120, textAlignVertical: 'top' }} error={errors.message} />
+              <Input label={`${t('message')} *`} value={form.message} onChangeText={(v) => { setForm({ ...form, message: v }); if (errors.message) setErrors({ ...errors, message: '' }); }} multiline numberOfLines={5} style={{ minHeight: 120, textAlignVertical: 'top' }} error={errors.message} helper="At least 15 characters so we can help properly." />
               <Button title={t('send')} onPress={send} fullWidth />
             </ScrollView>
           </KeyboardAvoidingView>

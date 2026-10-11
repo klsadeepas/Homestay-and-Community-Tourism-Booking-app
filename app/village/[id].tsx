@@ -16,6 +16,7 @@ import { useAlert } from '@/template';
 import { useSettings } from '@/hooks/useSettings';
 import { formatPrice } from '@/services/currency';
 import { ResponsibleGuide } from '@/constants/sampleData';
+import { hasErrors, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 const TOPICS: ResponsibleGuide['topic'][] = ['customs','photography','waste','wildlife','sacred','respectful'];
@@ -24,7 +25,7 @@ export default function VillageDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { villages, listings, events, transport, responsible, seasonal, bookings,
-    updateVillage, addResponsible, updateResponsible, addAudit } = useData();
+    updateVillage, addResponsible, updateResponsible, logAction } = useData();
   const { user } = useAuth();
   const { showAlert } = useAlert();
   const { t, currency } = useSettings();
@@ -34,6 +35,8 @@ export default function VillageDetail() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [editingGuide, setEditingGuide] = useState<ResponsibleGuide | null>(null);
   const [gForm, setGForm] = useState<Partial<ResponsibleGuide>>({ topic: 'customs' });
+  const [descErr, setDescErr] = useState('');
+  const [gErrs, setGErrs] = useState<Errors>({});
 
   const canEdit = user?.role === 'coordinator' || user?.role === 'admin';
   const assigned = new Set(user?.assignedVillages || []);
@@ -66,7 +69,11 @@ export default function VillageDetail() {
   const totalContribution = traceableContributions.reduce((s, c) => s + c.lkr, 0);
 
   const save = async () => {
-    await updateVillage(village.id, { description: desc });
+    const msg = required(desc, 'Village description') || textLength(desc, 'Village description', 20, 1200);
+    setDescErr(msg);
+    if (msg) return;
+    await updateVillage(village.id, { description: desc.trim() });
+    await logAction('village_updated', village.name);
     setEditing(false);
     showAlert('Saved', 'Village profile updated.');
   };
@@ -74,13 +81,19 @@ export default function VillageDetail() {
   const openGuideNew = () => {
     setEditingGuide(null);
     setGForm({ topic: 'customs', villageId: village.id, status: 'draft' });
+    setGErrs({});
     setGuideOpen(true);
   };
   const openGuideEdit = (g: ResponsibleGuide) => {
-    setEditingGuide(g); setGForm(g); setGuideOpen(true);
+    setEditingGuide(g); setGForm(g); setGErrs({}); setGuideOpen(true);
   };
   const saveGuide = async (status: ResponsibleGuide['status']) => {
-    if (!gForm.title?.trim() || !gForm.body?.trim()) { showAlert('Missing', 'Title and body are required.'); return; }
+    const e: Errors = {
+      title: required(gForm.title, 'Title') || textLength(gForm.title || '', 'Title', 5, 120),
+      body: required(gForm.body, 'Body') || textLength(gForm.body || '', 'Body', 20, 2000),
+    };
+    setGErrs(e);
+    if (hasErrors(e)) return;
     const payload: ResponsibleGuide = {
       id: editingGuide?.id || `rg-${Date.now()}`,
       villageId: village.id,
@@ -94,14 +107,17 @@ export default function VillageDetail() {
     };
     if (editingGuide) await updateResponsible(payload.id, payload);
     else await addResponsible(payload);
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'responsible_update', target: payload.title, reason: `status=${status}`, createdAt: new Date().toISOString() });
+    await logAction(status === 'published' ? 'guidance_published' : 'guidance_saved', payload.title, `status=${status}`);
     setGuideOpen(false);
   };
 
   const flagGuide = (g: ResponsibleGuide) => {
     showAlert('Flag for review?', 'This marks the guidance as needing an update by a local reviewer.', [
       { text: t('cancel'), style: 'cancel' },
-      { text: 'Flag', onPress: () => updateResponsible(g.id, { status: 'needs_update' }) },
+      { text: 'Flag', onPress: async () => {
+        await updateResponsible(g.id, { status: 'needs_update' });
+        await logAction('guidance_flagged', g.title);
+      }},
     ]);
   };
 
@@ -114,7 +130,7 @@ export default function VillageDetail() {
           <Text style={styles.region}>{village.region}</Text>
           {editing ? (
             <>
-              <Input value={desc} onChangeText={setDesc} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} />
+              <Input value={desc} onChangeText={(v) => { setDesc(v); if (descErr) setDescErr(''); }} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={descErr} label="Village description" />
               <View style={styles.actions}>
                 <Button title="Cancel" variant="ghost" onPress={() => setEditing(false)} />
                 <Button title="Save" onPress={save} />
@@ -259,8 +275,8 @@ export default function VillageDetail() {
                   <Chip key={tp} label={tp} selected={gForm.topic === tp} onPress={() => setGForm({ ...gForm, topic: tp })} />
                 ))}
               </View>
-              <Input label="Title *" value={gForm.title || ''} onChangeText={(v) => setGForm({ ...gForm, title: v })} />
-              <Input label="Body *" value={gForm.body || ''} onChangeText={(v) => setGForm({ ...gForm, body: v })} multiline numberOfLines={5} style={{ minHeight: 120, textAlignVertical: 'top' }} />
+              <Input label="Title *" value={gForm.title || ''} onChangeText={(v) => { setGForm({ ...gForm, title: v }); if (gErrs.title) setGErrs({ ...gErrs, title: '' }); }} error={gErrs.title} />
+              <Input label="Body *" value={gForm.body || ''} onChangeText={(v) => { setGForm({ ...gForm, body: v }); if (gErrs.body) setGErrs({ ...gErrs, body: '' }); }} multiline numberOfLines={5} style={{ minHeight: 120, textAlignVertical: 'top' }} error={gErrs.body} />
               <Text style={styles.caption}>Only publish items reviewed by an authorized local coordinator for this village.</Text>
               <View style={styles.actions}>
                 <Button title={t('cancel')} variant="ghost" onPress={() => setGuideOpen(false)} />

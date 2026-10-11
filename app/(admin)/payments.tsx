@@ -20,8 +20,8 @@ const METHODS: Record<string, string> = { card_demo: 'Card (demo)', local_wallet
 
 export default function AdminPayments() {
   const router = useRouter();
-  const { users, user } = useAuth();
-  const { bookings, listings, platform, updateBooking, addAudit } = useData();
+  const { users } = useAuth();
+  const { bookings, listings, platform, updateBooking, logAction } = useData();
   const { currency } = useSettings();
   const { showAlert } = useAlert();
   const [filter, setFilter] = useState<Filter>('all');
@@ -44,7 +44,7 @@ export default function AdminPayments() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Mark paid', onPress: async () => {
         await updateBooking(b.id, { paymentStatus: 'paid', paymentRef: `RS-DEMO-${Math.floor(1000 + Math.random() * 9000)}`, paidAt: new Date().toISOString() });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'mark_paid', target: b.id, createdAt: new Date().toISOString() });
+        await logAction('payment_marked_paid', b.id);
       }},
     ]);
   };
@@ -54,7 +54,7 @@ export default function AdminPayments() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Refunded', onPress: async () => {
         await updateBooking(b.id, { paymentStatus: 'refunded' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'mark_refunded', target: b.id, createdAt: new Date().toISOString() });
+        await logAction('payment_refunded', b.id);
       }},
     ]);
   };

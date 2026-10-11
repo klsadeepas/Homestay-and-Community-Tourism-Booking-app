@@ -12,6 +12,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useAlert } from '@/template';
 import { FAQItem, SupportTicket } from '@/constants/sampleData';
+import { hasErrors, numberField, oneOf, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 const CAT_LABELS: Record<string, string> = { booking: 'Bookings', payment: 'Payments', host: 'Hosts', guide: 'Guides', app: 'App help', other: 'Other' };
@@ -19,16 +20,17 @@ const STATUSES: SupportTicket['status'][] = ['open', 'in_progress', 'resolved', 
 
 export default function AdminSupport() {
   const { users, user } = useAuth();
-  const { tickets, faqs, updateTicket, addFAQ, updateFAQ, deleteFAQ, addAudit, addNotification } = useData();
+  const { tickets, faqs, updateTicket, addFAQ, updateFAQ, deleteFAQ, logAction, addNotification } = useData();
   const { showAlert } = useAlert();
   const [tab, setTab] = useState<'tickets' | 'faqs'>('tickets');
   const [statusFilter, setStatusFilter] = useState<'all' | SupportTicket['status']>('all');
   const [active, setActive] = useState<SupportTicket | null>(null);
   const [reply, setReply] = useState('');
+  const [replyErr, setReplyErr] = useState('');
   const [faqOpen, setFaqOpen] = useState(false);
   const [editingFaq, setEditingFaq] = useState<FAQItem | null>(null);
   const [form, setForm] = useState({ question: '', answer: '', category: 'booking', order: '1' });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Errors>({});
 
   const sorted = [...tickets].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const filtered = statusFilter === 'all' ? sorted : sorted.filter((tk) => tk.status === statusFilter);
@@ -36,19 +38,24 @@ export default function AdminSupport() {
 
   const setStatus = async (tk: SupportTicket, status: SupportTicket['status']) => {
     await updateTicket(tk.id, { status });
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: `ticket_${status}`, target: tk.subject, createdAt: new Date().toISOString() });
+    await logAction(`ticket_${status}`, `${tk.subject} · ${tk.id}`);
     setActive({ ...tk, status });
   };
 
   const sendReply = async () => {
-    if (!active || !reply.trim()) return;
+    if (!active) return;
+    const msg = required(reply, 'Reply') || textLength(reply, 'Reply', 2, 1000);
+    setReplyErr(msg);
+    if (msg) return;
     const next = [...active.replies, { id: `tkr-${Date.now()}`, from: user?.name || 'Support', text: reply.trim(), createdAt: new Date().toISOString().slice(0, 10), staff: true }];
     const patch: Partial<SupportTicket> = { replies: next };
     if (active.status === 'open') patch.status = 'in_progress';
     await updateTicket(active.id, patch);
+    await logAction('ticket_reply_sent', `${active.subject} · ${active.id}`);
     await addNotification({ id: `n-${Date.now()}`, userId: active.userId, title: 'Support replied', body: `Support replied to "${active.subject}".`, type: 'announcement', link: '/support', createdAt: new Date().toISOString(), read: false });
     setActive({ ...active, ...patch });
     setReply('');
+    setReplyErr('');
   };
 
   const openFaq = (f: FAQItem | null) => {
@@ -59,21 +66,25 @@ export default function AdminSupport() {
   };
 
   const saveFaq = async () => {
-    const e: Record<string, string> = {};
-    if (!form.question.trim()) e.question = 'Question is required';
-    if (!form.answer.trim()) e.answer = 'Answer is required';
+    const e: Errors = {};
+    e.question = required(form.question, 'Question') || textLength(form.question, 'Question', 8, 200);
+    e.answer = required(form.answer, 'Answer') || textLength(form.answer, 'Answer', 10, 1500);
+    e.category = oneOf(form.category, Object.keys(CAT_LABELS), 'Category');
+    e.order = numberField(form.order, { label: 'Display order', min: 1, max: 999, integer: true });
+    const dupe = faqs.some((f) => f.id !== editingFaq?.id && f.question.trim().toLowerCase() === form.question.trim().toLowerCase());
+    if (!hasErrors(e) && dupe) e.question = 'A FAQ with this question already exists.';
     setErrors(e);
-    if (Object.keys(e).length) return;
+    if (hasErrors(e)) return;
     const payload: FAQItem = {
       id: editingFaq?.id || `f-${Date.now()}`,
       question: form.question.trim(),
       answer: form.answer.trim(),
       category: form.category,
       published: editingFaq?.published ?? true,
-      order: Number(form.order) || 1,
+      order: Number(form.order),
     };
     if (editingFaq) await updateFAQ(payload.id, payload); else await addFAQ(payload);
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: editingFaq ? 'update_faq' : 'create_faq', target: payload.question, createdAt: new Date().toISOString() });
+    await logAction(editingFaq ? 'faq_updated' : 'faq_created', payload.question, `category=${payload.category}, order=${payload.order}`);
     setFaqOpen(false);
   };
 
@@ -82,7 +93,7 @@ export default function AdminSupport() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         await deleteFAQ(f.id);
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'delete_faq', target: f.question, createdAt: new Date().toISOString() });
+        await logAction('faq_deleted', f.question);
       }},
     ]);
   };
@@ -168,7 +179,7 @@ export default function AdminSupport() {
                 ))}
                 {active.status !== 'closed' && active.status !== 'resolved' ? (
                   <View style={styles.replyForm}>
-                    <Input placeholder="Write a reply…" value={reply} onChangeText={setReply} multiline numberOfLines={3} style={{ minHeight: 70, textAlignVertical: 'top' }} />
+                    <Input placeholder="Write a reply…" value={reply} onChangeText={(v) => { setReply(v); if (replyErr) setReplyErr(''); }} multiline numberOfLines={3} style={{ minHeight: 70, textAlignVertical: 'top' }} error={replyErr} />
                     <Button title="Send reply" onPress={sendReply} disabled={!reply.trim()} />
                   </View>
                 ) : null}
@@ -188,15 +199,16 @@ export default function AdminSupport() {
         <Screen back onBack={() => setFaqOpen(false)} title={editingFaq ? 'Edit FAQ' : 'New FAQ'}>
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={{ padding: spacing.lg }} keyboardShouldPersistTaps="handled">
-              <Input label="Question *" value={form.question} onChangeText={(v) => setForm({ ...form, question: v })} error={errors.question} />
-              <Input label="Answer *" value={form.answer} onChangeText={(v) => setForm({ ...form, answer: v })} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={errors.answer} />
+              <Input label="Question *" value={form.question} onChangeText={(v) => setForm({ ...form, question: v })} error={errors.question} helper="8–200 characters, and unique." />
+              <Input label="Answer *" value={form.answer} onChangeText={(v) => setForm({ ...form, answer: v })} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={errors.answer} helper="At least 10 characters." />
               <Text style={styles.label}>Category</Text>
               <View style={styles.chipRow}>
                 {Object.entries(CAT_LABELS).map(([k, v]) => (
                   <Chip key={k} label={v} selected={form.category === k} onPress={() => setForm({ ...form, category: k })} />
                 ))}
               </View>
-              <Input label="Display order" value={form.order} onChangeText={(v) => setForm({ ...form, order: v })} keyboardType="numeric" />
+              {errors.category ? <Text style={styles.errText}>{errors.category}</Text> : null}
+              <Input label="Display order" value={form.order} onChangeText={(v) => setForm({ ...form, order: v })} keyboardType="numeric" error={errors.order} helper="Whole number from 1; lower numbers appear first." />
               {editingFaq ? (
                 <View style={styles.toggleRow}>
                   <Text style={styles.label}>Published</Text>
@@ -231,5 +243,6 @@ const styles = StyleSheet.create({
   bubbleText: { ...typography.body, color: colors.text },
   replyForm: { gap: spacing.sm, marginTop: spacing.md },
   label: { ...typography.smallBold, color: colors.text, marginBottom: 6 },
+  errText: { ...typography.caption, color: colors.danger, marginTop: -2 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md },
 });

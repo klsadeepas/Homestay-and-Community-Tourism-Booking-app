@@ -1,45 +1,54 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Switch } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
-import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useAlert } from '@/template';
-import { isCloudSyncEnabled } from '@/services/sync';
+import { isCloudSyncEnabled, cloudHost } from '@/services/sync';
+import { probeMediaBucket, type MediaStatus } from '@/services/uploads';
+import { email as emailRule, hasErrors, numberField, required, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 export default function AdminSystem() {
-  const { user } = useAuth();
-  const { platform, updatePlatform, resetDemoData, addAudit } = useData();
+  const { platform, updatePlatform, resetDemoData, logAction, live } = useData();
   const { showAlert } = useAlert();
   const [form, setForm] = useState({
     serviceFeePct: String(platform.serviceFeePct),
     bookingNoticeDays: String(platform.bookingNoticeDays),
     supportEmail: platform.supportEmail,
   });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Errors>({});
+  const [media, setMedia] = useState<MediaStatus>('unconfigured');
   const cloudSync = isCloudSyncEnabled();
 
+  useEffect(() => {
+    let alive = true;
+    if (!cloudSync) { setMedia('unconfigured'); return; }
+    setMedia('unreachable');
+    void probeMediaBucket().then((s) => { if (alive) setMedia(s); });
+    return () => { alive = false; };
+  }, [cloudSync]);
+
   const save = async () => {
-    const e: Record<string, string> = {};
+    const e: Errors = {};
+    e.serviceFeePct = numberField(form.serviceFeePct, { label: 'Service fee', min: 0, max: 50 });
+    e.bookingNoticeDays = numberField(form.bookingNoticeDays, { label: 'Booking notice', min: 0, max: 365, integer: true });
+    e.supportEmail = required(form.supportEmail, 'Support email') || emailRule(form.supportEmail);
+    setErrors(e);
+    if (hasErrors(e)) return;
     const fee = Number(form.serviceFeePct);
     const notice = Number(form.bookingNoticeDays);
-    if (Number.isNaN(fee) || fee < 0 || fee > 50) e.serviceFeePct = 'Enter 0–50';
-    if (Number.isNaN(notice) || notice < 0) e.bookingNoticeDays = 'Enter 0 or more';
-    if (!/^\S+@\S+\.\S+$/.test(form.supportEmail.trim())) e.supportEmail = 'Enter a valid email';
-    setErrors(e);
-    if (Object.keys(e).length) return;
     await updatePlatform({ serviceFeePct: fee, bookingNoticeDays: notice, supportEmail: form.supportEmail.trim() });
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'update_platform', target: 'platform config', createdAt: new Date().toISOString() });
+    await logAction('platform_config_updated', 'platform config', `fee=${fee}%, notice=${notice} days`);
     showAlert('Settings saved', 'Platform configuration updated.');
   };
 
   const toggleMaintenance = async (v: boolean) => {
     await updatePlatform({ maintenanceMode: v });
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: v ? 'enable_maintenance' : 'disable_maintenance', target: 'platform', createdAt: new Date().toISOString() });
+    await logAction(v ? 'maintenance_enabled' : 'maintenance_disabled', 'platform');
   };
 
   const reset = () => {
@@ -80,10 +89,23 @@ export default function AdminSystem() {
           <View style={styles.rowLine}>
             <MaterialIcons name={cloudSync ? 'cloud-done' : 'cloud-off'} size={20} color={cloudSync ? colors.success : colors.warning} />
             <Text style={styles.rowText}>Cloud database (Supabase)</Text>
-            <Badge label={cloudSync ? 'synced' : 'offline'} tone={cloudSync ? 'success' : 'warning'} />
+            <Badge label={live ? 'live · tables' : cloudSync ? 'env set, tables off' : 'offline'} tone={live ? 'success' : 'warning'} />
           </View>
           {cloudSync ? (
-            <Text style={styles.foot}>App data syncs to the Supabase cloud; other devices see changes after restarting the app.</Text>
+            <Text style={styles.foot}>Project: {cloudHost()} — every device reads and writes the same tables, so changes appear on other phones within about a second. If a phone shows anything other than this host, that APK was built with different environment variables.</Text>
+          ) : (
+            <Text style={styles.foot}>No Supabase project is compiled into this build. Data stays on this device only — set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY as EAS environment variables and rebuild.</Text>
+          )}
+          <View style={styles.rowLine}>
+            <MaterialIcons name={media === 'ready' ? 'cloud-done' : 'cloud-off'} size={20} color={media === 'ready' ? colors.success : colors.warning} />
+            <Text style={styles.rowText}>Device images (media bucket)</Text>
+            <Badge
+              label={media === 'ready' ? 'OK' : media === 'missing' ? 'needs schema_v3' : media === 'unconfigured' ? 'not configured' : 'unreachable'}
+              tone={media === 'ready' ? 'success' : 'warning'}
+            />
+          </View>
+          {media === 'missing' ? (
+            <Text style={styles.foot}>Photos picked on a phone cannot upload yet — run supabase/schema_v3.sql in the SQL Editor to create the public “media” bucket and its policies.</Text>
           ) : null}
           <View style={styles.rowLine}>
             <MaterialIcons name="info" size={20} color={colors.warning} />

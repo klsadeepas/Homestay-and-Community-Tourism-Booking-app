@@ -8,20 +8,24 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Chip } from '@/components/ui/Chip';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { DateField } from '@/components/ui/DateField';
+import { PhotoField } from '@/components/ui/PhotoField';
 import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useSettings } from '@/hooks/useSettings';
 import { useAlert } from '@/template';
 import { EventItem } from '@/constants/sampleData';
+import { hasErrors, numberField, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 type Status = 'all' | 'draft' | 'published' | 'cancelled';
 const AUDIENCES: EventItem['audience'][] = ['all', 'travelers', 'residents', 'owners', 'guides'];
+const EVENT_TYPES: NonNullable<EventItem['type']>[] = ['festival', 'cultural', 'market', 'other'];
 
 export default function ManageEvents() {
   const router = useRouter();
   const { user } = useAuth();
-  const { events, villages, addEvent, updateEvent, deleteEvent, addAudit } = useData();
+  const { events, villages, addEvent, updateEvent, deleteEvent, logAction } = useData();
   const { t } = useSettings();
   const { showAlert } = useAlert();
   const [tab, setTab] = useState<Status>('all');
@@ -41,7 +45,7 @@ export default function ManageEvents() {
 
   const openNew = () => {
     setEditing(null);
-    setForm({ audience: 'all', status: 'draft', capacity: 50, type: 'cultural', villageId: Array.from(assigned)[0], photo: 'https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=1200&auto=format&fit=crop&q=80' });
+    setForm({ audience: 'all', status: 'draft', capacity: 50, type: 'cultural', villageId: Array.from(assigned)[0] });
     setErrors({});
     setOpen(true);
   };
@@ -51,15 +55,17 @@ export default function ManageEvents() {
   };
 
   const validate = (): boolean => {
-    const e: Record<string, string> = {};
-    if (!form.title?.trim()) e.title = 'Title is required';
-    if (!form.description?.trim()) e.description = 'Description is required';
-    if (!form.dateFrom?.trim()) e.dateFrom = 'Start date is required';
-    if (form.dateTo && form.dateFrom && form.dateTo < form.dateFrom) e.dateTo = 'End date must be after start';
-    if (!form.capacity || form.capacity < 1) e.capacity = 'Capacity must be at least 1';
-    if (!form.villageId) e.villageId = 'Village is required';
+    const e: Errors = {};
+    e.title = required(form.title, 'Title') || textLength(form.title || '', 'Title', 4, 120);
+    e.description = required(form.description, 'Description') || textLength(form.description || '', 'Description', 20, 1500);
+    e.dateFrom = required(form.dateFrom, 'Start date');
+    e.dateTo = form.dateTo && form.dateFrom && form.dateTo < form.dateFrom ? 'End date must be on or after the start date.' : '';
+    e.capacity = numberField(form.capacity ?? '', { label: 'Capacity', min: 1, max: 100000, integer: true });
+    e.villageId = required(form.villageId, 'Village');
+    e.location = textLength(form.location || '', 'Location', 0, 120);
+    e.photo = required(form.photo, 'Photo');
     setErrors(e);
-    return Object.keys(e).length === 0;
+    return !hasErrors(e);
   };
 
   const save = async (status: EventItem['status']) => {
@@ -67,20 +73,20 @@ export default function ManageEvents() {
     const payload: EventItem = {
       id: editing?.id || `e-${Date.now()}`,
       villageId: form.villageId!,
-      title: form.title!,
-      description: form.description!,
+      title: form.title!.trim(),
+      description: form.description!.trim(),
       dateFrom: form.dateFrom!,
       dateTo: form.dateTo || form.dateFrom!,
       capacity: Number(form.capacity),
-      photo: form.photo || 'https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=1200&auto=format&fit=crop&q=80',
+      photo: form.photo!,
       status,
       audience: form.audience || 'all',
-      location: form.location,
+      location: form.location?.trim() || undefined,
       type: form.type,
       authorId: user!.id,
     };
     if (editing) await updateEvent(payload.id, payload); else await addEvent(payload);
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: editing ? 'update_event' : 'create_event', target: payload.title, reason: `status=${status}`, createdAt: new Date().toISOString() });
+    await logAction(editing ? 'event_updated' : 'event_created', `${payload.title} · ${payload.dateFrom}${payload.dateTo !== payload.dateFrom ? ` → ${payload.dateTo}` : ''}`, `status=${status}`);
     setOpen(false);
   };
 
@@ -89,7 +95,7 @@ export default function ManageEvents() {
       { text: t('cancel'), style: 'cancel' },
       { text: 'Cancel event', style: 'destructive', onPress: async () => {
         await updateEvent(e.id, { status: 'cancelled' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'cancel_event', target: e.title, createdAt: new Date().toISOString() });
+        await logAction('event_cancelled', e.title);
       }},
     ]);
   };
@@ -99,7 +105,7 @@ export default function ManageEvents() {
       { text: t('cancel'), style: 'cancel' },
       { text: 'Publish', onPress: async () => {
         await updateEvent(e.id, { status: 'published' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'publish_event', target: e.title, createdAt: new Date().toISOString() });
+        await logAction('event_published', e.title, `audience=${e.audience}`);
       }},
     ]);
   };
@@ -153,10 +159,17 @@ export default function ManageEvents() {
             <ScrollView contentContainerStyle={{ padding: spacing.lg }} keyboardShouldPersistTaps="handled">
               <Input label="Title *" value={form.title || ''} onChangeText={(v) => setForm({ ...form, title: v })} error={errors.title} />
               <Input label="Description *" value={form.description || ''} onChangeText={(v) => setForm({ ...form, description: v })} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={errors.description} />
-              <Input label="Start date * (YYYY-MM-DD)" value={form.dateFrom || ''} onChangeText={(v) => setForm({ ...form, dateFrom: v })} error={errors.dateFrom} />
-              <Input label="End date (YYYY-MM-DD)" value={form.dateTo || ''} onChangeText={(v) => setForm({ ...form, dateTo: v })} error={errors.dateTo} />
-              <Input label="Location" value={form.location || ''} onChangeText={(v) => setForm({ ...form, location: v })} />
+              <View style={styles.twoCol}>
+                <View style={{ flex: 1 }}>
+                  <DateField label="Start date *" value={form.dateFrom || ''} onChange={(v) => setForm({ ...form, dateFrom: v })} error={errors.dateFrom} title="Event start date" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <DateField label="End date" value={form.dateTo || ''} onChange={(v) => setForm({ ...form, dateTo: v })} minDate={form.dateFrom} error={errors.dateTo} title="Event end date" />
+                </View>
+              </View>
+              <Input label="Location" value={form.location || ''} onChangeText={(v) => setForm({ ...form, location: v })} error={errors.location} />
               <Input label="Capacity *" value={String(form.capacity || '')} onChangeText={(v) => setForm({ ...form, capacity: Number(v) || 0 })} keyboardType="numeric" error={errors.capacity} />
+              <PhotoField label="Photo *" value={form.photo || ''} onChange={(v) => setForm({ ...form, photo: v })} folder="events" error={errors.photo} allowCamera helper="Choose a picture from this phone — it uploads so every device can see it." />
 
               <Text style={styles.label}>Village *</Text>
               <View style={styles.chipRow}>
@@ -165,6 +178,13 @@ export default function ManageEvents() {
                 ))}
               </View>
               {errors.villageId ? <Text style={styles.err}>{errors.villageId}</Text> : null}
+
+              <Text style={styles.label}>Type</Text>
+              <View style={styles.chipRow}>
+                {EVENT_TYPES.map((tp) => (
+                  <Chip key={tp} label={tp} selected={form.type === tp} onPress={() => setForm({ ...form, type: tp })} />
+                ))}
+              </View>
 
               <Text style={styles.label}>Audience</Text>
               <View style={styles.chipRow}>
@@ -200,6 +220,7 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, justifyContent: 'flex-end', flexWrap: 'wrap' },
   label: { ...typography.smallBold, color: colors.text, marginTop: spacing.md, marginBottom: 6 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  twoCol: { flexDirection: 'row', gap: spacing.sm },
   hint: { ...typography.caption, color: colors.textMuted, fontStyle: 'italic', marginTop: spacing.sm },
   err: { color: colors.danger, ...typography.caption, marginTop: 4 },
 });

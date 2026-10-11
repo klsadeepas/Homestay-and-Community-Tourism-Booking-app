@@ -1,24 +1,19 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { Avatar } from '@/components/ui/Avatar';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { PhotoField } from '@/components/ui/PhotoField';
 import { useAuth } from '@/hooks/useAuth';
 import { useSettings } from '@/hooks/useSettings';
 import { useAlert } from '@/template';
+import { csv, hasErrors, phone as phoneRule, required, textLength, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
-const AVATAR_CHOICES = [
-  'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400',
-  'https://images.unsplash.com/photo-1552058544-f2b08422138a?w=400',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400',
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400',
-  'https://images.unsplash.com/photo-1544723795-3fb6469f5b39?w=400',
-];
+const WORD = /^[A-Za-zÀ-ɏ'’ -]{2,30}$/;
 
 export default function EditProfile() {
   const router = useRouter();
@@ -38,19 +33,32 @@ export default function EditProfile() {
   const [languages, setLanguages] = useState((user?.languagesSpoken || []).join(', '));
   const [experience, setExperience] = useState(user?.experience || '');
   const [activities, setActivities] = useState((user?.activities || []).join(', '));
-  const [showPicker, setShowPicker] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Errors>({});
 
   const role = user?.role;
 
   const save = async () => {
-    const e: Record<string, string> = {};
-    if (!name.trim()) e.name = 'Name is required';
-    if (role === 'owner' && !village.trim()) e.village = 'Village is required';
-    if (role === 'guide' && !village.trim()) e.village = 'Village is required';
-    if (role === 'guide' && !languages.trim()) e.languages = 'List at least one language';
+    const e: Errors = {};
+    e.name = required(name, 'Name') || textLength(name, 'Name', 2, 80);
+    e.phone = phoneRule(phone, 'Phone');
+    e.bio = textLength(bio, 'Bio', 0, 500);
+    if (role === 'owner') {
+      e.village = required(village, 'Village') || textLength(village, 'Village', 2, 80);
+      e.homestayName = textLength(homestayName, 'Homestay name', 0, 80);
+    }
+    if (role === 'guide') {
+      e.village = required(village, 'Village') || textLength(village, 'Village', 2, 80);
+      e.languages = required(languages, 'Languages') || csv(languages, 'Languages', (item) => (WORD.test(item) ? '' : `"${item}" is not a valid language name.`));
+      e.experience = textLength(experience, 'Experience', 0, 800);
+      e.activities = csv(activities, 'Activities', (item) => textLength(item, 'Activity', 2, 60));
+    }
+    if (role === 'traveler') {
+      e.homeRegion = textLength(homeRegion, 'Home region', 0, 80);
+      e.interests = csv(interests, 'Interests', (item) => textLength(item, 'Interest', 2, 40));
+      e.accessibility = csv(accessibility, 'Accessibility needs', (item) => textLength(item, 'Need', 2, 60));
+    }
     setErrors(e);
-    if (Object.keys(e).length) return;
+    if (hasErrors(e)) return;
 
     const patch: any = { name: name.trim(), phone: phone.trim(), photo, bio: bio.trim() };
     if (role === 'traveler') {
@@ -76,33 +84,22 @@ export default function EditProfile() {
         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xxl }} keyboardShouldPersistTaps="handled">
           <View style={styles.avatarWrap}>
             <Avatar uri={photo} name={name} size={100} />
-            <Pressable onPress={() => setShowPicker((v) => !v)} style={styles.photoBtn}>
-              <MaterialIcons name="photo-camera" size={16} color="#fff" />
-              <Text style={styles.photoBtnText}>{t('uploadPhoto')}</Text>
-            </Pressable>
-            {showPicker ? (
-              <View style={styles.pickerRow}>
-                {AVATAR_CHOICES.map((u) => (
-                  <Pressable key={u} onPress={() => { setPhoto(u); setShowPicker(false); }} style={[styles.pickerItem, photo === u && styles.pickerItemActive]}>
-                    <Avatar uri={u} size={56} />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-            <Text style={styles.caption}>Demo photo picker. Native file picker not connected.</Text>
+            <Text style={styles.caption}>The image you choose is uploaded to the shared database, so hosts, guides and admins see the same photo.</Text>
           </View>
+
+          <PhotoField label={`${t('photo')} — from this device`} value={photo} onChange={setPhoto} folder="profiles" allowCamera error={errors.photo} />
 
           <Text style={styles.section}>Personal</Text>
           <Input label={`${t('name')} *`} value={name} onChangeText={setName} error={errors.name} />
-          <Input label={t('phone')} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-          <Input label="Short bio" value={bio} onChangeText={setBio} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} />
+          <Input label={t('phone')} value={phone} onChangeText={setPhone} keyboardType="phone-pad" error={errors.phone} helper="e.g. 077 123 4567" />
+          <Input label="Short bio" value={bio} onChangeText={setBio} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} error={errors.bio} />
 
           {role === 'traveler' ? (
             <>
               <Text style={styles.section}>Travel preferences</Text>
-              <Input label="Home region" value={homeRegion} onChangeText={setHomeRegion} placeholder="e.g. Colombo" />
-              <Input label="Interests (comma separated)" value={interests} onChangeText={setInterests} placeholder="Hiking, Culture, Food" />
-              <Input label="Accessibility needs (optional)" value={accessibility} onChangeText={setAccessibility} placeholder="e.g. step-free rooms" />
+              <Input label="Home region" value={homeRegion} onChangeText={setHomeRegion} placeholder="e.g. Colombo" error={errors.homeRegion} />
+              <Input label="Interests (comma separated)" value={interests} onChangeText={setInterests} placeholder="Hiking, Culture, Food" error={errors.interests} />
+              <Input label="Accessibility needs (optional)" value={accessibility} onChangeText={setAccessibility} placeholder="e.g. step-free rooms" error={errors.accessibility} />
             </>
           ) : null}
 
@@ -110,7 +107,7 @@ export default function EditProfile() {
             <>
               <Text style={styles.section}>Homestay details</Text>
               <Input label="Village *" value={village} onChangeText={setVillage} error={errors.village} />
-              <Input label="Homestay name" value={homestayName} onChangeText={setHomestayName} />
+              <Input label="Homestay name" value={homestayName} onChangeText={setHomestayName} error={errors.homestayName} />
             </>
           ) : null}
 
@@ -119,8 +116,8 @@ export default function EditProfile() {
               <Text style={styles.section}>Guiding details</Text>
               <Input label="Village *" value={village} onChangeText={setVillage} error={errors.village} />
               <Input label="Languages (comma separated) *" value={languages} onChangeText={setLanguages} error={errors.languages} placeholder="English, Sinhala" />
-              <Input label="Experience" value={experience} onChangeText={setExperience} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} />
-              <Input label="Activities offered (comma separated)" value={activities} onChangeText={setActivities} placeholder="Hiking, Cultural" />
+              <Input label="Experience" value={experience} onChangeText={setExperience} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} error={errors.experience} />
+              <Input label="Activities offered (comma separated)" value={activities} onChangeText={setActivities} placeholder="Hiking, Cultural" error={errors.activities} />
             </>
           ) : null}
 
@@ -154,12 +151,7 @@ export default function EditProfile() {
 
 const styles = StyleSheet.create({
   avatarWrap: { alignItems: 'center', marginBottom: spacing.lg, gap: spacing.sm },
-  photoBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.pill },
-  photoBtnText: { color: '#fff', ...typography.smallBold },
-  pickerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'center' },
-  pickerItem: { padding: 2, borderRadius: 32, borderWidth: 2, borderColor: 'transparent' },
-  pickerItemActive: { borderColor: colors.primary },
-  caption: { ...typography.caption, color: colors.textMuted, fontStyle: 'italic' },
+  caption: { ...typography.caption, color: colors.textMuted, fontStyle: 'italic', textAlign: 'center' },
   section: { ...typography.smallBold, color: colors.textMuted, textTransform: 'uppercase', marginTop: spacing.md, marginBottom: spacing.sm },
   lockRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, backgroundColor: colors.surfaceAlt, padding: spacing.md, borderRadius: radius.md, marginBottom: spacing.sm },
   lockText: { ...typography.small, color: colors.textMuted, flex: 1 },

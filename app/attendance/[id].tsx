@@ -18,7 +18,7 @@ export default function Attendance() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user, users } = useAuth();
-  const { listings, bookings, updateBooking, addNotification } = useData();
+  const { listings, bookings, updateBooking, addNotification, logAction } = useData();
   const { t } = useSettings();
   const { showAlert } = useAlert();
 
@@ -30,6 +30,7 @@ export default function Attendance() {
 
   const setStatus = async (bookingId: string, status: Status) => {
     await updateBooking(bookingId, { checkIn: status });
+    await logAction('attendance_marked', `${tour.title} · ${bookingId}`, status);
   };
 
   const markCompleted = async () => {
@@ -48,6 +49,7 @@ export default function Attendance() {
   const complete = async () => {
     for (const b of session) {
       await updateBooking(b.id, { status: 'completed', checkIn: b.checkIn || 'checked_in' });
+      await logAction('booking_completed', `${tour.title} · ${b.id}`, `attendance ${b.checkIn || 'checked_in'}`);
       await addNotification({ id: `n-${Date.now()}-${b.id}`, userId: b.travelerId, title: 'Tour completed', body: `${tour.title} has been marked complete. You can now leave a review.`, read: false, createdAt: new Date().toISOString(), type: 'booking', link: `/booking/${b.id}` });
     }
     showAlert('Tour marked complete', 'Confirmed participants are now set to Completed and can leave reviews.');

@@ -19,7 +19,7 @@ type Filter = 'all' | 'visible' | 'hidden' | 'reported';
 export default function AdminReviews() {
   const router = useRouter();
   const { users, user } = useAuth();
-  const { reviews, listings, reports, updateReview, deleteReview, updateReport, addAudit } = useData();
+  const { reviews, listings, reports, updateReview, deleteReview, updateReport, logAction } = useData();
   const { showAlert } = useAlert();
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -40,7 +40,7 @@ export default function AdminReviews() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Hide', style: 'destructive', onPress: async () => {
         await updateReview(id, { hidden: true });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'hide_review', target: id, createdAt: new Date().toISOString() });
+        await logAction('hide_review', id);
       }},
     ]);
   };
@@ -50,7 +50,7 @@ export default function AdminReviews() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Restore', onPress: async () => {
         await updateReview(id, { hidden: false });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'restore_review', target: id, createdAt: new Date().toISOString() });
+        await logAction('restore_review', id);
       }},
     ]);
   };
@@ -60,7 +60,7 @@ export default function AdminReviews() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         await deleteReview(id);
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'delete_review', target: id, createdAt: new Date().toISOString() });
+        await logAction('delete_review', id);
       }},
     ]);
   };
@@ -70,7 +70,7 @@ export default function AdminReviews() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Confirm', onPress: async () => {
         for (const r of openReportsFor(reviewId)) await updateReport(r.id, { status });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: status === 'resolved' ? 'resolve_report' : 'dismiss_report', target: reviewId, createdAt: new Date().toISOString() });
+        await logAction(status === 'resolved' ? 'resolve_report' : 'dismiss_report', reviewId);
       }},
     ]);
   };

@@ -1,17 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notifyWrite } from './sync';
 
+// Device-local cache only. The shared source of truth is the Supabase tables in
+// services/db.ts; these keys hold the offline copy plus genuinely local state
+// (session, settings, filters, wishlist).
 export const storage = {
   async get<T>(key: string): Promise<T | null> {
     try { const raw = await AsyncStorage.getItem(key); return raw ? (JSON.parse(raw) as T) : null; } catch { return null; }
   },
   async set<T>(key: string, value: T): Promise<void> {
     try { await AsyncStorage.setItem(key, JSON.stringify(value)); } catch {}
-    notifyWrite(key, value);
   },
   async remove(key: string): Promise<void> {
     try { await AsyncStorage.removeItem(key); } catch {}
-    notifyWrite(key, null);
   },
 };
 

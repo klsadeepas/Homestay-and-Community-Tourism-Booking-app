@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useData } from '@/hooks/useData';
 import { useAlert } from '@/template';
 import { Listing } from '@/constants/sampleData';
+import { required, textLength } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
 
 type Tab = 'people' | 'listings';
@@ -22,14 +23,15 @@ type ListingFilter = 'all' | 'submitted' | 'under_review' | 'approved' | 'needs_
 
 export default function AdminApprovals() {
   const router = useRouter();
-  const { users, user, updateUser } = useAuth();
-  const { listings, villages, updateListing, addAudit } = useData();
+  const { users, updateUser } = useAuth();
+  const { listings, villages, updateListing, logAction } = useData();
   const { showAlert } = useAlert();
   const [tab, setTab] = useState<Tab>('people');
-  const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>('pending');
+  const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>('all');
   const [listingFilter, setListingFilter] = useState<ListingFilter>('submitted');
   const [reasonFor, setReasonFor] = useState<Listing | null>(null);
   const [reason, setReason] = useState('');
+  const [reasonErr, setReasonErr] = useState('');
 
   const hostsAndGuides = users.filter((u) => u.role === 'owner' || u.role === 'guide');
   const people = hostsAndGuides.filter((u) => peopleFilter === 'all' || (u.status || 'active') === peopleFilter);
@@ -42,7 +44,7 @@ export default function AdminApprovals() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Approve', onPress: async () => {
         await updateUser(id, { status: 'active' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'approve_account', target: name, createdAt: new Date().toISOString() });
+        await logAction('account_approved', name);
       }},
     ]);
   };
@@ -52,7 +54,7 @@ export default function AdminApprovals() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Reject', style: 'destructive', onPress: async () => {
         await updateUser(id, { status: 'suspended' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'reject_account', target: name, createdAt: new Date().toISOString() });
+        await logAction('account_rejected', name);
       }},
     ]);
   };
@@ -62,17 +64,21 @@ export default function AdminApprovals() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Approve', onPress: async () => {
         await updateListing(l.id, { status: 'approved', reviewReason: undefined });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'approve_listing', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('listing_approved', `${l.title} · ${l.id}`);
       }},
     ]);
   };
 
-  const openReason = (l: Listing) => { setReasonFor(l); setReason(l.reviewReason || ''); };
+  const openReason = (l: Listing) => { setReasonFor(l); setReason(l.reviewReason || ''); setReasonErr(''); };
   const submitReason = async () => {
-    if (!reasonFor || !reason.trim()) return;
+    if (!reasonFor) return;
+    const msg = required(reason, 'Reason') || textLength(reason, 'Reason', 10, 400);
+    setReasonErr(msg);
+    if (msg) return;
     await updateListing(reasonFor.id, { status: 'needs_changes', reviewReason: reason.trim() });
-    await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'request_changes', target: reasonFor.title, reason: reason.trim(), createdAt: new Date().toISOString() });
+    await logAction('listing_changes_requested', `${reasonFor.title} · ${reasonFor.id}`, reason.trim());
     setReasonFor(null);
+    setReasonErr('');
   };
 
   const suspendListing = (l: Listing) => {
@@ -80,7 +86,7 @@ export default function AdminApprovals() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Suspend', style: 'destructive', onPress: async () => {
         await updateListing(l.id, { status: 'suspended' });
-        await addAudit({ id: `au-${Date.now()}`, actorId: user!.id, action: 'suspend_listing', target: l.title, createdAt: new Date().toISOString() });
+        await logAction('listing_suspended', `${l.title} · ${l.id}`);
       }},
     ]);
   };
@@ -179,10 +185,10 @@ export default function AdminApprovals() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={{ padding: spacing.lg }} keyboardShouldPersistTaps="handled">
               <Text style={styles.hint}>Tell the host or guide what to fix before “{reasonFor?.title}” can be approved. The listing returns to their drafts as “needs changes”.</Text>
-              <Input label="Reason *" value={reason} onChangeText={setReason} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} />
+              <Input label="Reason *" value={reason} onChangeText={(v) => { setReason(v); if (reasonErr) setReasonErr(''); }} multiline numberOfLines={4} style={{ minHeight: 100, textAlignVertical: 'top' }} error={reasonErr} />
               <View style={styles.actions}>
                 <Button title="Cancel" variant="ghost" onPress={() => setReasonFor(null)} />
-                <Button title="Send request" onPress={submitReason} disabled={!reason.trim()} />
+                <Button title="Send request" onPress={submitReason} />
               </View>
             </ScrollView>
           </KeyboardAvoidingView>

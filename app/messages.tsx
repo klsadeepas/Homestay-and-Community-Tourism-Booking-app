@@ -11,7 +11,7 @@ import { colors, radius, spacing, typography } from '@/constants/theme';
 
 export default function Messages() {
   const { user, users } = useAuth();
-  const { threads, messages, addMessage } = useData();
+  const { threads, messages, addMessage, logAction } = useData();
   const { t } = useSettings();
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -59,6 +59,7 @@ export default function Messages() {
       text: draft.trim(),
       createdAt: new Date().toISOString(),
     });
+    await logAction('message_sent', `Thread with ${other?.name || thread.bookingId || thread.id}`, draft.trim().slice(0, 120));
     setDraft('');
   };
 

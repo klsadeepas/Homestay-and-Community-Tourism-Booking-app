@@ -8,18 +8,26 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { StarRating } from '@/components/ui/StarRating';
+import { DateField, todayIso } from '@/components/ui/DateField';
 import { useData } from '@/hooks/useData';
 import { useAuth } from '@/hooks/useAuth';
 import { useAlert } from '@/template';
 import { useSettings } from '@/hooks/useSettings';
 import { formatPrice } from '@/services/currency';
+import { hasErrors, numberField, required, textLength, time as timeRule, type Errors } from '@/services/validation';
 import { colors, radius, spacing, typography } from '@/constants/theme';
+
+const DATE_TIME_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/;
+const splitDateTime = (raw: string | undefined, fallbackDate: string) => {
+  const m = raw ? DATE_TIME_RE.exec(raw) : null;
+  return { date: m ? m[1] : fallbackDate, time: m ? m[2] : '' };
+};
 
 export default function BookingDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { bookings, listings, villages, transport, pickups, arrivals, reviews,
-    updateBooking, addNotification, addPickup, updatePickup, upsertArrival, addReview } = useData();
+    updateBooking, addNotification, addPickup, updatePickup, upsertArrival, addReview, logAction } = useData();
   const { user, users } = useAuth();
   const { showAlert } = useAlert();
   const { t, currency } = useSettings();
@@ -38,23 +46,30 @@ export default function BookingDetail() {
   const canSeeDetails = user?.id === booking.travelerId || user?.id === listing?.ownerId;
 
   // Arrival state
-  const [eta, setEta] = useState(arrival?.travelerEta || '');
+  const initialEta = splitDateTime(arrival?.travelerEta, booking.dateFrom);
+  const [etaDate, setEtaDate] = useState(initialEta.date);
+  const [etaTime, setEtaTime] = useState(initialEta.time || '15:00');
   const [method, setMethod] = useState(arrival?.travelerMethod || '');
   const [arrNote, setArrNote] = useState(arrival?.travelerNote || '');
   const [hostWindow, setHostWindow] = useState(arrival?.hostCheckInWindow || '');
   const [hostInstr, setHostInstr] = useState(arrival?.hostInstructions || '');
   const [hostMeet, setHostMeet] = useState(arrival?.hostMeetingPoint || '');
+  const [arrErrs, setArrErrs] = useState<Errors>({});
+  const [hostErrs, setHostErrs] = useState<Errors>({});
 
   // Pickup state
   const [pFrom, setPFrom] = useState('');
-  const [pWhen, setPWhen] = useState('');
+  const [pDate, setPDate] = useState(booking.dateFrom || todayIso());
+  const [pTime, setPTime] = useState('');
   const [pPassengers, setPPassengers] = useState('2');
   const [pAccess, setPAccess] = useState('');
   const [pNote, setPNote] = useState('');
+  const [pickErrs, setPickErrs] = useState<Errors>({});
 
   // Review state
   const [stars, setStars] = useState(5);
   const [reviewText, setReviewText] = useState('');
+  const [reviewErr, setReviewErr] = useState('');
 
   const toneByStatus: any = { pending: 'warning', confirmed: 'success', declined: 'danger', cancelled: 'muted', completed: 'info' };
   const payTone: any = { paid: 'success', processing: 'warning', failed: 'danger', unpaid: 'muted', refund_pending: 'warning', refunded: 'info' };
@@ -64,6 +79,7 @@ export default function BookingDetail() {
       { text: 'Keep', style: 'cancel' },
       { text: 'Cancel booking', style: 'destructive', onPress: async () => {
         await updateBooking(booking.id, { status: 'cancelled', paymentStatus: booking.paymentStatus === 'paid' ? 'refund_pending' : booking.paymentStatus });
+        await logAction('booking_cancelled', `${listing?.title || booking.listingId} · ${booking.id}`, booking.paymentStatus === 'paid' ? 'refund pending' : undefined);
         const otherId = user?.id === booking.travelerId ? listing?.ownerId : booking.travelerId;
         if (otherId) await addNotification({ id: `n-${Date.now()}`, userId: otherId, title: 'Booking cancelled', body: `${listing?.title} booking cancelled.`, read: false, createdAt: new Date().toISOString(), type: 'booking' });
       }},
@@ -71,33 +87,59 @@ export default function BookingDetail() {
   };
 
   const saveTravelerArrival = async () => {
-    await upsertArrival(booking.id, { travelerEta: eta, travelerMethod: method, travelerNote: arrNote, travelerUpdatedAt: new Date().toISOString() });
-    if (listing?.ownerId) await addNotification({ id: `n-${Date.now()}`, userId: listing.ownerId, title: 'Arrival details updated', body: `${traveler?.name} shared estimated arrival.`, read: false, createdAt: new Date().toISOString(), type: 'arrival', link: `/booking/${booking.id}` });
+    const errs: Errors = {};
+    errs.etaDate = required(etaDate, 'Arrival date');
+    errs.etaTime = timeRule(etaTime, 'Arrival time');
+    errs.method = textLength(method, 'Arrival method', 0, 120);
+    errs.arrNote = textLength(arrNote, 'Note', 0, 500);
+    setArrErrs(errs);
+    if (hasErrors(errs)) return;
+    const eta = `${etaDate} ${etaTime}`;
+    await upsertArrival(booking.id, { travelerEta: eta, travelerMethod: method.trim(), travelerNote: arrNote.trim(), travelerUpdatedAt: new Date().toISOString() });
+    await logAction('arrival_details_shared', `Booking ${booking.id}`, eta);
+    if (listing?.ownerId) await addNotification({ id: `n-${Date.now()}`, userId: listing.ownerId, title: 'Arrival details updated', body: `${traveler?.name} shared estimated arrival (${eta}).`, read: false, createdAt: new Date().toISOString(), type: 'arrival', link: `/booking/${booking.id}` });
     showAlert('Shared', 'Host has been notified. This is an estimate — not a booking change.');
   };
   const saveHostArrival = async () => {
-    await upsertArrival(booking.id, { hostCheckInWindow: hostWindow, hostInstructions: hostInstr, hostMeetingPoint: hostMeet, hostUpdatedAt: new Date().toISOString(), acknowledged: true });
+    const errs: Errors = {};
+    errs.hostWindow = required(hostWindow, 'Check-in window') || textLength(hostWindow, 'Check-in window', 3, 60);
+    errs.hostMeet = required(hostMeet, 'Meeting point') || textLength(hostMeet, 'Meeting point', 3, 160);
+    errs.hostInstr = required(hostInstr, 'Instructions') || textLength(hostInstr, 'Instructions', 10, 600);
+    setHostErrs(errs);
+    if (hasErrors(errs)) return;
+    await upsertArrival(booking.id, { hostCheckInWindow: hostWindow.trim(), hostInstructions: hostInstr.trim(), hostMeetingPoint: hostMeet.trim(), hostUpdatedAt: new Date().toISOString(), acknowledged: true });
+    await logAction('host_checkin_details_saved', `${listing?.title || booking.listingId} · ${booking.id}`, hostWindow.trim());
     await addNotification({ id: `n-${Date.now()}`, userId: booking.travelerId, title: 'Check-in instructions updated', body: `${owner?.name} confirmed check-in details.`, read: false, createdAt: new Date().toISOString(), type: 'arrival', link: `/booking/${booking.id}` });
     showAlert('Saved', 'Traveler notified of the check-in details.');
   };
 
   const submitPickup = async () => {
-    if (!pFrom.trim() || !pWhen.trim()) { showAlert('Missing details', 'Pickup location and date/time are required.'); return; }
+    const errs: Errors = {};
+    errs.pFrom = required(pFrom, 'Pickup location') || textLength(pFrom, 'Pickup location', 3, 160);
+    errs.pDate = required(pDate, 'Pickup date') || (pDate < todayIso() ? 'Pickup date cannot be in the past.' : '');
+    errs.pTime = timeRule(pTime, 'Pickup time');
+    errs.pPassengers = numberField(pPassengers, { label: 'Passengers', min: 1, max: 20, integer: true });
+    errs.pNote = textLength(pNote, 'Note', 0, 500);
+    setPickErrs(errs);
+    if (hasErrors(errs)) return;
+    const when = `${pDate} ${pTime}`;
     const req = {
       id: `pk-${Date.now()}`,
       bookingId: booking.id,
       travelerId: user!.id,
       pickupFrom: pFrom.trim(),
-      dateTime: pWhen.trim(),
-      passengers: Math.max(1, Number(pPassengers) || 1),
-      accessibility: pAccess || undefined,
-      note: pNote || undefined,
+      dateTime: when,
+      passengers: Number(pPassengers),
+      accessibility: pAccess.trim() || undefined,
+      note: pNote.trim() || undefined,
       status: 'requested' as const,
       createdAt: new Date().toISOString(),
     };
     await addPickup(req);
+    await logAction('pickup_requested', `${listing?.title || booking.listingId} · ${booking.id}`, `${req.pickupFrom} at ${when} · ${req.passengers} passenger(s)`);
     if (listing?.ownerId) await addNotification({ id: `n-${Date.now()}`, userId: listing.ownerId, title: 'Pickup requested', body: `${traveler?.name} asked for a pickup for ${listing.title}.`, read: false, createdAt: new Date().toISOString(), type: 'pickup', link: `/booking/${booking.id}` });
-    setPFrom(''); setPWhen(''); setPPassengers('2'); setPAccess(''); setPNote('');
+    setPFrom(''); setPDate(booking.dateFrom || todayIso()); setPTime(''); setPPassengers('2'); setPAccess(''); setPNote('');
+    setPickErrs({});
     showAlert('Pickup requested', 'Demo flow — no driver has been dispatched. The host or guide will respond in-app.');
   };
 
@@ -106,6 +148,7 @@ export default function BookingDetail() {
       { text: t('cancel'), style: 'cancel' },
       { text: status === 'accepted' ? t('accept') : t('decline'), onPress: async () => {
         await updatePickup(pkId, { status, responderId: user!.id, response: status === 'accepted' ? 'We will coordinate on-site.' : 'Not able to arrange this time.' });
+        await logAction(`pickup_${status}`, `Pickup ${pkId} · Booking ${booking.id}`);
         await addNotification({ id: `n-${Date.now()}`, userId: booking.travelerId, title: `Pickup ${status}`, body: `Your pickup request was ${status}.`, read: false, createdAt: new Date().toISOString(), type: 'pickup', link: `/booking/${booking.id}` });
       }},
     ]);
@@ -114,16 +157,20 @@ export default function BookingDetail() {
   const cancelPickup = (pkId: string) => {
     showAlert('Cancel pickup?', '', [
       { text: t('cancel'), style: 'cancel' },
-      { text: 'Cancel pickup', style: 'destructive', onPress: () => updatePickup(pkId, { status: 'cancelled' }) },
+      { text: 'Cancel pickup', style: 'destructive', onPress: async () => { await updatePickup(pkId, { status: 'cancelled' }); await logAction('pickup_cancelled', `Request ${pkId} · Booking ${booking.id}`); } },
     ]);
   };
 
   const postReview = async () => {
-    if (!reviewText.trim()) { showAlert('Write something', 'Please add some text.'); return; }
+    const msg = required(reviewText, 'Review') || textLength(reviewText, 'Review', 10, 1000);
+    setReviewErr(msg);
+    if (msg) return;
     if (existingReview) { showAlert('Already reviewed', 'You have already left a review for this booking.'); return; }
     if (booking.status !== 'completed') { showAlert('Not eligible', 'Reviews are available after a booking is marked completed.'); return; }
     await addReview({ id: `r-${Date.now()}`, listingId: listing!.id, travelerId: user!.id, bookingId: booking.id, rating: stars, text: reviewText.trim(), createdAt: new Date().toISOString() });
+    await logAction('review_posted', `${listing!.title} · ${stars} star(s)`, reviewText.trim().slice(0, 120));
     setReviewText('');
+    setReviewErr('');
     showAlert('Thanks', 'Your review has been posted.');
   };
 
@@ -197,9 +244,16 @@ export default function BookingDetail() {
               {user?.id === booking.travelerId ? (
                 <>
                   <Text style={styles.subheading}>Share your estimated arrival</Text>
-                  <Input label="Estimated arrival (date & time)" value={eta} onChangeText={setEta} placeholder="e.g. 2026-10-10 15:30" />
-                  <Input label="Arrival method" value={method} onChangeText={setMethod} placeholder="e.g. Train from Kandy" />
-                  <Input label="Note (optional)" value={arrNote} onChangeText={setArrNote} multiline numberOfLines={2} style={{ minHeight: 60, textAlignVertical: 'top' }} />
+                  <View style={styles.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <DateField label="Arrival date" value={etaDate} onChange={setEtaDate} error={arrErrs.etaDate} title="Estimated arrival date" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Input label="Time (24h)" value={etaTime} onChangeText={setEtaTime} placeholder="HH:MM" keyboardType="numbers-and-punctuation" error={arrErrs.etaTime} />
+                    </View>
+                  </View>
+                  <Input label="Arrival method" value={method} onChangeText={setMethod} placeholder="e.g. Train from Kandy" error={arrErrs.method} />
+                  <Input label="Note (optional)" value={arrNote} onChangeText={setArrNote} multiline numberOfLines={2} style={{ minHeight: 60, textAlignVertical: 'top' }} error={arrErrs.arrNote} />
                   <Button title="Share arrival" onPress={saveTravelerArrival} />
                   <Text style={styles.caption}>This is an estimate. Not a booking change, payment, or pickup reservation.</Text>
                 </>
@@ -208,9 +262,9 @@ export default function BookingDetail() {
               {user?.id === listing?.ownerId ? (
                 <>
                   <Text style={styles.subheading}>Confirm check-in instructions</Text>
-                  <Input label="Check-in window" value={hostWindow} onChangeText={setHostWindow} placeholder="e.g. 2 PM – 7 PM" />
-                  <Input label="Meeting point" value={hostMeet} onChangeText={setHostMeet} placeholder="Where to meet or who to call" />
-                  <Input label="Instructions" value={hostInstr} onChangeText={setHostInstr} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} />
+                  <Input label="Check-in window" value={hostWindow} onChangeText={setHostWindow} placeholder="e.g. 14:00 – 19:00" error={hostErrs.hostWindow} />
+                  <Input label="Meeting point" value={hostMeet} onChangeText={setHostMeet} placeholder="Where to meet or who to call" error={hostErrs.hostMeet} />
+                  <Input label="Instructions" value={hostInstr} onChangeText={setHostInstr} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} error={hostErrs.hostInstr} />
                   <Button title="Save & confirm" onPress={saveHostArrival} />
                   {arrival?.travelerEta ? (
                     <View style={styles.etaBox}>
@@ -252,11 +306,18 @@ export default function BookingDetail() {
               {user?.id === booking.travelerId ? (
                 <>
                   <Text style={styles.subheading}>Request a pickup</Text>
-                  <Input label="Pickup from" value={pFrom} onChangeText={setPFrom} placeholder="Train station, airport, address" />
-                  <Input label="Date & time" value={pWhen} onChangeText={setPWhen} placeholder="e.g. 2026-10-10 15:00" />
-                  <Input label="Passengers" value={pPassengers} onChangeText={setPPassengers} keyboardType="numeric" />
+                  <Input label="Pickup from" value={pFrom} onChangeText={setPFrom} placeholder="Train station, airport, address" error={pickErrs.pFrom} />
+                  <View style={styles.twoCol}>
+                    <View style={{ flex: 1 }}>
+                      <DateField label="Pickup date" value={pDate} onChange={setPDate} minDate={todayIso()} error={pickErrs.pDate} title="Pickup date" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Input label="Time (24h)" value={pTime} onChangeText={setPTime} placeholder="HH:MM" keyboardType="numbers-and-punctuation" error={pickErrs.pTime} />
+                    </View>
+                  </View>
+                  <Input label="Passengers" value={pPassengers} onChangeText={setPPassengers} keyboardType="numeric" error={pickErrs.pPassengers} />
                   <Input label="Accessibility needs" value={pAccess} onChangeText={setPAccess} />
-                  <Input label="Note (optional)" value={pNote} onChangeText={setPNote} multiline numberOfLines={2} style={{ minHeight: 60, textAlignVertical: 'top' }} />
+                  <Input label="Note (optional)" value={pNote} onChangeText={setPNote} multiline numberOfLines={2} style={{ minHeight: 60, textAlignVertical: 'top' }} error={pickErrs.pNote} />
                   <Button title={t('requestPickup')} onPress={submitPickup} />
                   <Text style={styles.caption}>Demo flow — no vehicle is reserved and no driver is dispatched. The host/guide will respond in-app.</Text>
                 </>
@@ -289,7 +350,7 @@ export default function BookingDetail() {
               ) : (
                 <>
                   <StarRating value={stars} onChange={setStars} />
-                  <Input placeholder="Share your experience" value={reviewText} onChangeText={setReviewText} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} containerStyle={{ marginTop: spacing.sm }} />
+                  <Input placeholder="Share your experience" value={reviewText} onChangeText={setReviewText} multiline numberOfLines={3} style={{ minHeight: 80, textAlignVertical: 'top' }} containerStyle={{ marginTop: spacing.sm }} error={reviewErr} />
                   <Button title="Post review" onPress={postReview} />
                   <Text style={styles.caption}>One review per completed booking. Local reviews are not externally verified.</Text>
                 </>
@@ -328,6 +389,7 @@ const styles = StyleSheet.create({
   title: { ...typography.h2, color: colors.text, flex: 1 },
   sub: { ...typography.small, color: colors.textMuted },
   card: { backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, padding: spacing.md, gap: 6, marginTop: spacing.md },
+  twoCol: { flexDirection: 'row', gap: spacing.sm },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: 6 },
   rowLabel: { ...typography.small, color: colors.textMuted, flex: 1 },
   rowValue: { ...typography.smallBold, color: colors.text },

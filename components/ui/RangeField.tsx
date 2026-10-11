@@ -10,14 +10,17 @@ interface Props {
   onMax: (v: string) => void;
   suffix?: string;
   numeric?: boolean;
+  errorMin?: string;
+  errorMax?: string;
 }
 
-export function RangeField({ label, min, max, onMin, onMax, suffix, numeric }: Props) {
+export function RangeField({ label, min, max, onMin, onMax, suffix, numeric, errorMin, errorMax }: Props) {
+  const error = errorMin || errorMax;
   return (
     <View style={{ marginBottom: spacing.md }}>
       <Text style={styles.label}>{label}</Text>
       <View style={styles.row}>
-        <View style={styles.cell}>
+        <View style={[styles.cell, errorMin ? { borderColor: colors.danger } : null]}>
           <TextInput
             value={min}
             onChangeText={onMin}
@@ -29,7 +32,7 @@ export function RangeField({ label, min, max, onMin, onMax, suffix, numeric }: P
           {suffix ? <Text style={styles.suffix}>{suffix}</Text> : null}
         </View>
         <Text style={styles.dash}>–</Text>
-        <View style={styles.cell}>
+        <View style={[styles.cell, errorMax ? { borderColor: colors.danger } : null]}>
           <TextInput
             value={max}
             onChangeText={onMax}
@@ -41,6 +44,7 @@ export function RangeField({ label, min, max, onMin, onMax, suffix, numeric }: P
           {suffix ? <Text style={styles.suffix}>{suffix}</Text> : null}
         </View>
       </View>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
     </View>
   );
 }
@@ -56,4 +60,5 @@ const styles = StyleSheet.create({
   input: { flex: 1, color: colors.text, ...typography.body, paddingVertical: 0 },
   suffix: { ...typography.caption, color: colors.textMuted, marginLeft: 4 },
   dash: { color: colors.textMuted, ...typography.bodyBold },
+  error: { ...typography.caption, color: colors.danger, marginTop: 4 },
 });

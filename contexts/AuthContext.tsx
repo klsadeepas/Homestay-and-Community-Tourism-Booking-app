@@ -12,6 +12,7 @@ type AuthState = {
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signUp: (data: Partial<SampleUser> & { email: string; password: string; name: string; role: Role }) => Promise<{ ok: boolean; error?: string }>;
   addUser: (data: Partial<SampleUser> & { email: string; password: string; name: string; role: Role }) => Promise<{ ok: boolean; error?: string }>;
+  resetPassword: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
   updateProfile: (patch: Partial<SampleUser>) => Promise<void>;
   updateUser: (id: string, patch: Partial<SampleUser>) => Promise<void>;
@@ -149,6 +150,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { ok: true };
   };
 
+  // Demo-grade recovery: this app authenticates against the app_users table and
+  // has no mail server, so the account owner sets a new password in-app instead
+  // of clicking an emailed link. Tighten before a real deployment.
+  const resetPassword: AuthState['resetPassword'] = async (email, password) => {
+    const found = usersRef.current.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+    if (!found) {
+      await log('anonymous', 'reset_failed', email.trim().toLowerCase(), 'No account for this email');
+      return { ok: false, error: 'No account is registered with this email' };
+    }
+    if (found.status === 'suspended') return { ok: false, error: 'This account is suspended — contact support' };
+    if (found.password === password) return { ok: false, error: 'Use a different password from the current one' };
+    const nextUser = { ...found, password };
+    await persistUser(nextUser, usersRef.current.map((u) => (u.id === found.id ? nextUser : u)));
+    await log(found.id, 'password_reset', found.name || found.email);
+    return { ok: true };
+  };
+
   const addUser: AuthState['addUser'] = async (data) => {
     const exists = usersRef.current.find((u) => u.email.toLowerCase() === data.email.trim().toLowerCase());
     if (exists) return { ok: false, error: 'An account with this email already exists' };
@@ -193,7 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUsers]);
 
   return (
-    <AuthContext.Provider value={{ user, users, ready, signIn, signUp, addUser, signOut, updateProfile, updateUser }}>
+    <AuthContext.Provider value={{ user, users, ready, signIn, signUp, addUser, resetPassword, signOut, updateProfile, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

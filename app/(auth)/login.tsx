@@ -73,6 +73,11 @@ export default function Login() {
             <Input label={t('email')} value={email} onChangeText={onField('email', setEmail)} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" error={errs.email} />
             <Input label={t('password')} value={password} onChangeText={onField('password', setPassword)} secureTextEntry placeholder="••••••••" error={errs.password} />
             {errs.form ? <Text style={styles.err}>{errs.form}</Text> : null}
+            <Link href="/(auth)/forgot-password" asChild>
+              <Pressable style={styles.forgot} accessibilityRole="link">
+                <Text style={styles.link}>{t('forgotPassword')}</Text>
+              </Pressable>
+            </Link>
             <Button title={t('signIn')} onPress={onLogin} loading={loading} fullWidth />
             <View style={styles.row}>
               <Text style={styles.muted}>{t('noAccount')}</Text>
@@ -116,6 +121,7 @@ const styles = StyleSheet.create({
   },
   title: { ...typography.h2, color: colors.text, marginBottom: spacing.sm },
   err: { color: colors.danger, ...typography.small, marginBottom: 6 },
+  forgot: { alignSelf: 'flex-end', marginTop: spacing.sm, marginBottom: spacing.md },
   row: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, marginTop: spacing.md },
   muted: { color: colors.textMuted, ...typography.small },
   link: { color: colors.primary, ...typography.smallBold },

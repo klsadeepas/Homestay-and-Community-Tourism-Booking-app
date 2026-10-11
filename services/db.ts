@@ -117,7 +117,9 @@ const SPECS: Record<CollectionKey, Spec> = {
       ['note', 'note'], ['status', 'status'], ['response', 'response'], ['responder_id', 'responderId']],
   },
   arrivals: {
-    table: 'arrival_info', idColumn: 'booking_id', idField: 'bookingId', tsField: 'hostUpdatedAt',
+    // arrival_info keys on booking_id and stamps itself with updated_at, so it
+    // has no recorded_at column — the timestamp is mapped explicitly below.
+    table: 'arrival_info', idColumn: 'booking_id', idField: 'bookingId',
     orderBy: 'updated_at', ascending: false,
     columns: [['traveler_eta', 'travelerEta'], ['traveler_method', 'travelerMethod'],
       ['host_check_in_window', 'hostCheckInWindow'], ['host_meeting_point', 'hostMeetingPoint'],
